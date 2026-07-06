@@ -1,0 +1,492 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: >
+  qe-agent — EC2 + Amplify stack.
+  Backend: Single EC2 instance running the FastAPI Docker container, pulled
+  from ECR. Frontend: AWS Amplify Hosting (deployed separately by
+  cfn/deploy-frontend.sh). Secrets live in SSM Parameter Store and are
+  injected into the container at runtime.
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Parameters
+# ─────────────────────────────────────────────────────────────────────────────
+Parameters:
+
+  Env:
+    Type: String
+    Default: prod
+    AllowedValues: [dev, prod]
+    Description: Deployment environment label
+
+  InstanceType:
+    Type: String
+    Default: t3.small
+    AllowedValues: [t3.micro, t3.small, t3.medium, t3.large]
+    Description: EC2 instance type for the backend
+
+  KeyName:
+    Type: String
+    Default: ""
+    Description: >
+      (Optional) EC2 key pair name for SSH access. Leave blank to skip SSH —
+      SSM Session Manager works without a key pair.
+
+  SshCidr:
+    Type: String
+    Default: 0.0.0.0/0
+    Description: >
+      CIDR allowed to SSH (only used if KeyName is set). Default opens to the
+      world — narrow this to your IP for production.
+
+  LatestAmiId:
+    Type: AWS::EC2::Image::Id
+    Description: >
+      Amazon Linux 2023 AMI ID. setup-infra.sh resolves the latest AMI on
+      fresh deploys; on updates it pins to the running instance's AMI to
+      prevent accidental EC2 replacement.
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Conditions
+# ─────────────────────────────────────────────────────────────────────────────
+Conditions:
+  HasKeyName: !Not [!Equals [!Ref KeyName, ""]]
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Resources
+# ─────────────────────────────────────────────────────────────────────────────
+Resources:
+
+  # ── Networking ──────────────────────────────────────────────────────────────
+
+  VPC:
+    Type: AWS::EC2::VPC
+    Properties:
+      CidrBlock: 10.0.0.0/16
+      EnableDnsHostnames: true
+      EnableDnsSupport: true
+      Tags:
+        - Key: Name
+          Value: !Sub qe-agent-${Env}-vpc
+
+  InternetGateway:
+    Type: AWS::EC2::InternetGateway
+    Properties:
+      Tags:
+        - Key: Name
+          Value: !Sub qe-agent-${Env}-igw
+
+  IGWAttachment:
+    Type: AWS::EC2::VPCGatewayAttachment
+    Properties:
+      VpcId: !Ref VPC
+      InternetGatewayId: !Ref InternetGateway
+
+  PublicSubnet:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref VPC
+      CidrBlock: 10.0.1.0/24
+      AvailabilityZone: !Select [0, !GetAZs ""]
+      MapPublicIpOnLaunch: true
+      Tags:
+        - Key: Name
+          Value: !Sub qe-agent-${Env}-public
+
+  RouteTable:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref VPC
+      Tags:
+        - Key: Name
+          Value: !Sub qe-agent-${Env}-rt
+
+  PublicRoute:
+    Type: AWS::EC2::Route
+    DependsOn: IGWAttachment
+    Properties:
+      RouteTableId: !Ref RouteTable
+      DestinationCidrBlock: 0.0.0.0/0
+      GatewayId: !Ref InternetGateway
+
+  SubnetRTA:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref PublicSubnet
+      RouteTableId: !Ref RouteTable
+
+  # ── Security Group ──────────────────────────────────────────────────────────
+  # Backend listens on port 8000 (FastAPI). We expose it via port 80 with a
+  # tiny nginx reverse proxy installed on the instance — keeps the public URL
+  # clean and lets us add HTTPS via CloudFront in front later.
+
+  BackendSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: qe-agent backend EC2 SG
+      VpcId: !Ref VPC
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 80
+          ToPort: 80
+          CidrIp: 0.0.0.0/0
+          Description: HTTP - Next.js frontend
+        - IpProtocol: tcp
+          FromPort: 8000
+          ToPort: 8000
+          CidrIp: 0.0.0.0/0
+          Description: HTTP - FastAPI backend
+      Tags:
+        - Key: Name
+          Value: !Sub qe-agent-${Env}-sg
+
+  # SSH rule only attached when a KeyName is supplied — avoids opening 22 by
+  # default. Use SSM Session Manager (`aws ssm start-session`) for shell access.
+  SshIngress:
+    Type: AWS::EC2::SecurityGroupIngress
+    Condition: HasKeyName
+    Properties:
+      GroupId: !Ref BackendSecurityGroup
+      IpProtocol: tcp
+      FromPort: 22
+      ToPort: 22
+      CidrIp: !Ref SshCidr
+      Description: SSH
+
+  # ── Elastic IP ──────────────────────────────────────────────────────────────
+  # Static IP so the frontend's NEXT_PUBLIC_API_URL doesn't change between deploys.
+
+  BackendEIP:
+    Type: AWS::EC2::EIP
+    Properties:
+      Domain: vpc
+      Tags:
+        - Key: Name
+          Value: !Sub qe-agent-${Env}-eip
+
+  BackendEIPAssoc:
+    Type: AWS::EC2::EIPAssociation
+    Properties:
+      AllocationId: !GetAtt BackendEIP.AllocationId
+      InstanceId: !Ref BackendInstance
+
+  # ── ECR Repos ───────────────────────────────────────────────────────────────
+
+  BackendRepo:
+    Type: AWS::ECR::Repository
+    Properties:
+      RepositoryName: qe-agent/backend
+      EmptyOnDelete: true
+      ImageScanningConfiguration:
+        ScanOnPush: true
+
+  FrontendRepo:
+    Type: AWS::ECR::Repository
+    Properties:
+      RepositoryName: qe-agent/frontend
+      EmptyOnDelete: true
+      ImageScanningConfiguration:
+        ScanOnPush: true
+
+  # ── IAM — EC2 instance role ─────────────────────────────────────────────────
+  # Pull from ECR, read SSM secrets, register with Session Manager.
+
+  BackendInstanceRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub qe-agent-${Env}-ec2-role
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: ec2.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/AmazonEC2ContainerRegistryReadOnly
+        - arn:aws:iam::aws:policy/AmazonSSMManagedInstanceCore
+      Policies:
+        - PolicyName: SSMSecretsRead
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action:
+                  - ssm:GetParameter
+                  - ssm:GetParameters
+                  - ssm:GetParametersByPath
+                Resource:
+                  - !Sub arn:aws:ssm:${AWS::Region}:${AWS::AccountId}:parameter/qe-agent/*
+
+  BackendInstanceProfile:
+    Type: AWS::IAM::InstanceProfile
+    Properties:
+      InstanceProfileName: !Sub qe-agent-${Env}-ec2-profile
+      Roles:
+        - !Ref BackendInstanceRole
+
+  # ── EC2 instance ────────────────────────────────────────────────────────────
+  # UserData installs Docker + the AWS CLI, sets up a systemd unit that pulls
+  # the backend image from ECR + reads secrets from SSM at start, and starts it.
+  # Re-deploys after the first run go through deploy-backend.sh which uses
+  # SSM Run Command to refresh the container — no instance replacement needed.
+
+  BackendInstance:
+    Type: AWS::EC2::Instance
+    Properties:
+      InstanceType: !Ref InstanceType
+      ImageId: !Ref LatestAmiId
+      KeyName: !If [HasKeyName, !Ref KeyName, !Ref AWS::NoValue]
+      IamInstanceProfile: !Ref BackendInstanceProfile
+      SubnetId: !Ref PublicSubnet
+      SecurityGroupIds:
+        - !Ref BackendSecurityGroup
+      BlockDeviceMappings:
+        - DeviceName: /dev/xvda
+          Ebs:
+            VolumeSize: 20
+            VolumeType: gp3
+            DeleteOnTermination: true
+      Tags:
+        - Key: Name
+          Value: !Sub qe-agent-${Env}-backend
+        - Key: Project
+          Value: qe-agent
+      UserData:
+        Fn::Base64: !Sub |
+          #!/bin/bash
+          set -eux
+          dnf update -y
+          dnf install -y docker
+          systemctl enable --now docker
+
+          # Drop helper scripts invoked by SSM Run Command during deploys.
+          mkdir -p /opt/qe-agent
+
+          # run-backend.sh — pull latest backend image, refresh env from SSM, restart container
+          cat > /opt/qe-agent/run-backend.sh <<'RUN_BE'
+          #!/bin/bash
+          set -eu
+          REGION="ap-south-1"
+          ACCOUNT_ID=$(aws sts get-caller-identity --query Account --output text)
+          REGISTRY="$ACCOUNT_ID.dkr.ecr.$REGION.amazonaws.com"
+          IMAGE="$REGISTRY/qe-agent/backend:latest"
+
+          # Read all /qe-agent/env/* into KEY=VALUE pairs
+          ENV_FILE=/opt/qe-agent/.env
+          : > "$ENV_FILE"
+          NEXT_TOKEN=""
+          while :; do
+            if [ -n "$NEXT_TOKEN" ]; then
+              RESP=$(aws ssm get-parameters-by-path --path "/qe-agent/env/" \
+                --with-decryption --recursive --region "$REGION" \
+                --starting-token "$NEXT_TOKEN" --output json)
+            else
+              RESP=$(aws ssm get-parameters-by-path --path "/qe-agent/env/" \
+                --with-decryption --recursive --region "$REGION" --output json)
+            fi
+            echo "$RESP" | python3 -c '
+          import json,sys
+          d=json.load(sys.stdin)
+          for p in d.get("Parameters",[]):
+              k=p["Name"].split("/")[-1]
+              v=p["Value"].replace("\n","\\n")
+              print(f"{k}={v}")
+          ' >> "$ENV_FILE"
+            NEXT_TOKEN=$(echo "$RESP" | python3 -c 'import json,sys; d=json.load(sys.stdin); print(d.get("NextToken","") or "")')
+            [ -z "$NEXT_TOKEN" ] && break
+          done
+
+          aws ecr get-login-password --region "$REGION" \
+            | docker login --username AWS --password-stdin "$REGISTRY"
+          docker pull "$IMAGE"
+          docker rm -f qe-agent-backend 2>/dev/null || true
+          docker run -d --name qe-agent-backend --restart=always \
+            -p 8000:8000 \
+            --env-file "$ENV_FILE" \
+            "$IMAGE"
+          docker image prune -af >/dev/null 2>&1 || true
+          RUN_BE
+          chmod +x /opt/qe-agent/run-backend.sh
+
+          # run-frontend.sh — pull latest frontend image and restart container
+          # NEXT_PUBLIC_* vars are baked into the image at build time; no SSM needed.
+          cat > /opt/qe-agent/run-frontend.sh <<'RUN_FE'
+          #!/bin/bash
+          set -eu
+          REGION="ap-south-1"
+          ACCOUNT_ID=$(aws sts get-caller-identity --query Account --output text)
+          REGISTRY="$ACCOUNT_ID.dkr.ecr.$REGION.amazonaws.com"
+          IMAGE="$REGISTRY/qe-agent/frontend:latest"
+
+          aws ecr get-login-password --region "$REGION" \
+            | docker login --username AWS --password-stdin "$REGISTRY"
+          docker pull "$IMAGE"
+          docker rm -f qe-agent-frontend 2>/dev/null || true
+          docker run -d --name qe-agent-frontend --restart=always \
+            -p 80:3000 \
+            -e NODE_ENV=production \
+            -e NEXT_TELEMETRY_DISABLED=1 \
+            "$IMAGE"
+          docker image prune -af >/dev/null 2>&1 || true
+          RUN_FE
+          chmod +x /opt/qe-agent/run-frontend.sh
+
+          # First-boot: images don't exist yet — deploy scripts push them first.
+          /opt/qe-agent/run-backend.sh  || echo "Backend first-boot skipped (image not yet pushed)."
+          /opt/qe-agent/run-frontend.sh || echo "Frontend first-boot skipped (image not yet pushed)."
+
+  # ── CloudFront Function ─────────────────────────────────────────────────────
+  # Copies the viewer's Host header into X-Forwarded-Host before the request
+  # reaches the origin. Without this, Next.js 15+ CSRF guard rejects Server
+  # Actions because x-forwarded-host (set to the EC2 origin hostname by
+  # CloudFront) doesn't match the Origin header (the CloudFront domain).
+
+  SetForwardedHostFn:
+    Type: AWS::CloudFront::Function
+    Properties:
+      Name: !Sub qe-agent-${Env}-set-forwarded-host
+      AutoPublish: true
+      FunctionConfig:
+        Comment: Copies Host → X-Forwarded-Host for Next.js CSRF validation
+        Runtime: cloudfront-js-2.0
+      FunctionCode: |
+        function handler(event) {
+          var req = event.request;
+          if (req.headers['host']) {
+            req.headers['x-forwarded-host'] = { value: req.headers['host'].value };
+          }
+          return req;
+        }
+
+  # ── CloudFront distribution ─────────────────────────────────────────────────
+  # Single distribution with two origins (frontend on 80, backend on 8000) and
+  # path-based routing. /api/* goes to the backend; everything else to the
+  # Next.js frontend. Gives us trusted HTTPS via the *.cloudfront.net cert
+  # without needing a custom domain, and makes frontend+backend same-origin
+  # so cross-port cookie/CORS gymnastics go away.
+
+  CloudFrontDistribution:
+    Type: AWS::CloudFront::Distribution
+    # Wait for EIP to be associated before creating CloudFront, so the EC2's
+    # public DNS name already maps to the EIP when origins are configured.
+    DependsOn: BackendEIPAssoc
+    Properties:
+      DistributionConfig:
+        Enabled: true
+        Comment: !Sub qe-agent-${Env}
+        HttpVersion: http2
+        # PriceClass_100 = US, Canada, Europe edge locations only — cheapest tier.
+        # Bump to PriceClass_All for global, or PriceClass_200 for everything except SA/AU.
+        PriceClass: PriceClass_100
+        Origins:
+          # CloudFront requires a DNS hostname, not a raw IP address.
+          # Construct ec2-A-B-C-D.<region>.compute.amazonaws.com from the EIP.
+          - Id: frontend-origin
+            DomainName: !Sub
+              - "ec2-${A}-${B}-${C}-${D}.${AWS::Region}.compute.amazonaws.com"
+              - A: !Select [0, !Split [".", !Ref BackendEIP]]
+                B: !Select [1, !Split [".", !Ref BackendEIP]]
+                C: !Select [2, !Split [".", !Ref BackendEIP]]
+                D: !Select [3, !Split [".", !Ref BackendEIP]]
+            CustomOriginConfig:
+              HTTPPort: 80
+              OriginProtocolPolicy: http-only
+              OriginReadTimeout: 60
+              OriginKeepaliveTimeout: 60
+          - Id: backend-origin
+            DomainName: !Sub
+              - "ec2-${A}-${B}-${C}-${D}.${AWS::Region}.compute.amazonaws.com"
+              - A: !Select [0, !Split [".", !Ref BackendEIP]]
+                B: !Select [1, !Split [".", !Ref BackendEIP]]
+                C: !Select [2, !Split [".", !Ref BackendEIP]]
+                D: !Select [3, !Split [".", !Ref BackendEIP]]
+            CustomOriginConfig:
+              HTTPPort: 8000
+              OriginProtocolPolicy: http-only
+              OriginReadTimeout: 60
+              OriginKeepaliveTimeout: 60
+        DefaultCacheBehavior:
+          TargetOriginId: frontend-origin
+          ViewerProtocolPolicy: redirect-to-https
+          AllowedMethods: [GET, HEAD, OPTIONS, PUT, POST, PATCH, DELETE]
+          CachedMethods: [GET, HEAD]
+          Compress: true
+          # Managed-CachingDisabled — Next.js SSR is dynamic, do not cache.
+          CachePolicyId: 4135ea2d-6df8-44a3-9df3-4b5a84be39ad
+          # Managed-AllViewer — forward all viewer headers including Host.
+          OriginRequestPolicyId: 216adef6-5c7f-47e4-b989-5492eafa07d3
+          FunctionAssociations:
+            - EventType: viewer-request
+              FunctionARN: !GetAtt SetForwardedHostFn.FunctionARN
+        CacheBehaviors:
+          - PathPattern: /api/*
+            TargetOriginId: backend-origin
+            ViewerProtocolPolicy: redirect-to-https
+            AllowedMethods: [GET, HEAD, OPTIONS, PUT, POST, PATCH, DELETE]
+            CachedMethods: [GET, HEAD]
+            Compress: true
+            CachePolicyId: 4135ea2d-6df8-44a3-9df3-4b5a84be39ad
+            OriginRequestPolicyId: 216adef6-5c7f-47e4-b989-5492eafa07d3
+            FunctionAssociations:
+              - EventType: viewer-request
+                FunctionARN: !GetAtt SetForwardedHostFn.FunctionARN
+          - PathPattern: /_next/static/*
+            TargetOriginId: frontend-origin
+            ViewerProtocolPolicy: redirect-to-https
+            AllowedMethods: [GET, HEAD]
+            CachedMethods: [GET, HEAD]
+            Compress: true
+            # Managed-CachingOptimized — long TTLs for immutable Next.js build artifacts.
+            CachePolicyId: 658327ea-f89d-4fab-a63d-7e88639e58f6
+        ViewerCertificate:
+          CloudFrontDefaultCertificate: true
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Outputs
+# ─────────────────────────────────────────────────────────────────────────────
+Outputs:
+
+  BackendInstanceId:
+    Description: EC2 instance ID (use with SSM Run Command for re-deploys)
+    Value: !Ref BackendInstance
+    Export:
+      Name: !Sub qe-agent-${Env}-instance-id
+
+  BackendPublicIp:
+    Description: Static public IP of the backend (Elastic IP)
+    Value: !Ref BackendEIP
+    Export:
+      Name: !Sub qe-agent-${Env}-public-ip
+
+  CloudFrontUrl:
+    Description: HTTPS URL of the CloudFront distribution (public site URL)
+    Value: !Sub https://${CloudFrontDistribution.DomainName}
+    Export:
+      Name: !Sub qe-agent-${Env}-cloudfront-url
+
+  FrontendUrl:
+    Description: Public URL of the Next.js frontend (via CloudFront, HTTPS)
+    Value: !Sub https://${CloudFrontDistribution.DomainName}
+    Export:
+      Name: !Sub qe-agent-${Env}-frontend-url
+
+  BackendApiUrl:
+    Description: Public URL of the FastAPI backend (via CloudFront, /api/* path)
+    Value: !Sub https://${CloudFrontDistribution.DomainName}
+    Export:
+      Name: !Sub qe-agent-${Env}-api-url
+
+  BackendDirectUrl:
+    Description: Direct URL to the EC2 backend (bypasses CloudFront — debug only)
+    Value: !Sub http://${BackendEIP}:8000
+
+  EcrRegistry:
+    Description: ECR registry base URL
+    Value: !Sub ${AWS::AccountId}.dkr.ecr.${AWS::Region}.amazonaws.com
+
+  EcrBackendRepo:
+    Description: ECR repository name for the backend image
+    Value: !Ref BackendRepo
+
+  EcrFrontendRepo:
+    Description: ECR repository name for the frontend image
+    Value: !Ref FrontendRepo

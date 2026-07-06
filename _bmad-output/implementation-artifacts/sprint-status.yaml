@@ -1,0 +1,88 @@
+# generated: 2026-03-08
+# updated: 2026-04-05
+# project: qe-agent-v2
+# project_key: NOKEY
+# tracking_system: file-system
+# story_location: d:\New folder\qe-agent-v2\_bmad-output\implementation-artifacts
+
+# STATUS DEFINITIONS:
+# ==================
+# Epic Status:
+#   - backlog: Epic not yet started
+#   - in-progress: Epic actively being worked on
+#   - done: All stories in epic completed
+#
+# Epic Status Transitions:
+#   - backlog → in-progress: Automatically when first story is created (via create-story)
+#   - in-progress → done: Manually when all stories reach 'done' status
+#
+# Story Status:
+#   - backlog: Story only exists in epic file
+#   - ready-for-dev: Story file created in stories folder
+#   - in-progress: Developer actively working on implementation
+#   - review: Ready for code review (via Dev's code-review workflow)
+#   - done: Story completed
+#
+# Retrospective Status:
+#   - optional: Can be completed but not required
+#   - done: Retrospective has been completed
+#
+# WORKFLOW NOTES:
+# ===============
+# - Epic transitions to 'in-progress' automatically when first story is created
+# - Stories can be worked in parallel if team capacity allows
+# - SM typically creates next story after previous one is 'done' to incorporate learnings
+# - Dev moves story to 'review', then runs code-review (fresh context, different LLM recommended)
+
+generated: 2026-03-08
+updated: 2026-04-05
+project: qe-agent-v2
+project_key: NOKEY
+tracking_system: file-system
+story_location: d:\New folder\qe-agent-v2\_bmad-output\implementation-artifacts
+
+development_status:
+  epic-1: done
+  1-1-nextjs-frontend-scaffold: done
+  1-2-fastapi-backend-scaffold: done
+  1-3-bdd-generation-api: done
+  1-4-jira-ticket-ingestion: done
+  1-5-bdd-editor-panel: done
+  1-6-bdd-file-downloads-and-upload: done
+  epic-1-retrospective: optional
+
+  epic-2: done  # GitHub Code Verification (no auth, DEV_USER_ID stub)
+  2-1-github-source-selection-ui: done
+  2-2-github-code-fetching-all-3-modes: done
+  2-3-llm-verification-service-and-api: done
+  2-4-verification-results-display: done
+  2-5-agentic-verification-with-github-tools: done
+  epic-2-retrospective: optional
+
+  epic-3: done  # User Authentication & Session Persistence
+  3-1-supabase-auth-login-and-registration: done
+  3-2-fastapi-jwt-validation-and-route-protection: done
+  3-3-session-persistence-and-database-schema: done
+  3-4-supabase-storage-setup: done
+  3-5-session-history-dashboard: done
+  epic-3-retrospective: optional
+
+  epic-4: backlog  # Project Knowledge Base & RAG Enrichment
+  4-1-knowledge-base-service-and-confluence-integration: backlog
+  4-2-jira-workspace-knowledge-ingestion: backlog
+  4-3-rag-enriched-verification-integration: backlog
+  4-4-rag-context-display-panel: backlog
+  epic-4-retrospective: optional
+
+  epic-5: backlog  # Ticket Comprehension (RAG Q&A) & Traceability Reporting
+  5-1-rag-chat-api: backlog
+  5-2-rag-chat-ui: backlog
+  5-3-traceability-report-generation-api: backlog
+  5-4-pdf-and-csv-report-export: backlog
+  epic-5-retrospective: optional
+
+  epic-6: backlog  # Fine-Tuned Model Integration (Phase 2)
+  6-1-bdd-model-provider-abstraction: backlog
+  6-2-fine-tuned-model-integration: backlog
+  6-3-model-evaluation-pipeline: backlog
+  epic-6-retrospective: optional
