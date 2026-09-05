@@ -2,11 +2,12 @@
 
 import React, { createContext, useContext, useState, ReactNode } from "react";
 import { SSELogEvent } from "../lib/types/session";
-import type {
-    VerificationMode,
-    FetchedFile,
+import {
+    DEFAULT_VERIFICATION_MODE,
+    type VerificationMode,
     VerificationVerdict,
     VerificationSummary,
+    VerificationPlan,
 } from "../lib/types/verification";
 
 export interface BDDScenario {
@@ -23,6 +24,11 @@ interface SessionContextType {
     setSessionId: (id: string | null) => void;
     jiraTicketId: string | null;
     setJiraTicketId: (id: string | null) => void;
+    /** The URL (or bare key) the user submitted to ingest this session's ticket.
+     *  Lives here rather than in the pipeline page's local state so it survives
+     *  the route change from the throwaway session id to the real one. */
+    jiraTicketUrl: string | null;
+    setJiraTicketUrl: (value: string | null) => void;
     acceptanceCriteria: string | null;
     setAcceptanceCriteria: (criteria: string | null) => void;
     bddContent: string;
@@ -42,8 +48,12 @@ interface SessionContextType {
     setVerificationMode: (mode: VerificationMode | null) => void;
     githubInput: string;
     setGithubInput: (value: string) => void;
-    fetchedFiles: FetchedFile[];
-    setFetchedFiles: (files: FetchedFile[]) => void;
+    /** Story 4.9: opt-in to knowledge-base enrichment for the verification run. */
+    useKnowledgeBase: boolean;
+    setUseKnowledgeBase: (value: boolean) => void;
+    /** Opt-in: let the project's code index suggest which files to read first. */
+    codeIndexEnabled: boolean;
+    setCodeIndexEnabled: (value: boolean) => void;
     bddScenarios: BDDScenario[];
     setBddScenarios: (scenarios: BDDScenario[]) => void;
     // Story 2.3: LLM verification results (consumed by Story 2.4 display)
@@ -53,6 +63,12 @@ interface SessionContextType {
     ) => void;
     verificationSummary: VerificationSummary | null;
     setVerificationSummary: (summary: VerificationSummary | null) => void;
+    /** How many scenarios this run will actually verify, announced before the
+     *  first verdict. Null until a run starts, and lower than the count in the
+     *  BDD file whenever duplicates were skipped — progress measured against
+     *  the file would then stall short of 100%. */
+    verificationPlan: VerificationPlan | null;
+    setVerificationPlan: (plan: VerificationPlan | null) => void;
     /** Wipe every field back to its initial value. Call before navigating to
      *  a brand-new session so the destination page boots empty. */
     resetSession: () => void;
@@ -63,6 +79,7 @@ const SessionContext = createContext<SessionContextType | undefined>(undefined);
 export function SessionProvider({ children }: { children: ReactNode }) {
     const [sessionId, setSessionId] = useState<string | null>(null);
     const [jiraTicketId, setJiraTicketId] = useState<string | null>(null);
+    const [jiraTicketUrl, setJiraTicketUrl] = useState<string | null>(null);
     const [acceptanceCriteria, setAcceptanceCriteria] = useState<string | null>(null);
     const [bddContent, setBddContent] = useState<string>("");
     const [logs, setLogs] = useState<SSELogEvent[]>([]);
@@ -73,17 +90,21 @@ export function SessionProvider({ children }: { children: ReactNode }) {
     const [globalError, setGlobalError] = useState<string | null>(null);
 
     // Epic 2: GitHub Code Verification state
-    const [verificationMode, setVerificationMode] = useState<VerificationMode | null>(null);
+    const [verificationMode, setVerificationMode] =
+        useState<VerificationMode | null>(DEFAULT_VERIFICATION_MODE);
     const [githubInput, setGithubInput] = useState<string>("");
-    const [fetchedFiles, setFetchedFiles] = useState<FetchedFile[]>([]);
+    const [useKnowledgeBase, setUseKnowledgeBase] = useState<boolean>(false);
+    const [codeIndexEnabled, setCodeIndexEnabled] = useState<boolean>(false);
     // Story 2.3: LLM verification results
     const [verificationResults, setVerificationResults] = useState<VerificationVerdict[]>([]);
     const [verificationSummary, setVerificationSummary] = useState<VerificationSummary | null>(null);
+    const [verificationPlan, setVerificationPlan] = useState<VerificationPlan | null>(null);
     const [bddScenarios, setBddScenarios] = useState<BDDScenario[]>([]);
 
     const resetSession = () => {
         setSessionId(null);
         setJiraTicketId(null);
+        setJiraTicketUrl(null);
         setAcceptanceCriteria(null);
         setBddContent("");
         setLogs([]);
@@ -91,12 +112,14 @@ export function SessionProvider({ children }: { children: ReactNode }) {
         setIsGeneratingBDD(false);
         setIsVerifying(false);
         setGlobalError(null);
-        setVerificationMode(null);
+        setVerificationMode(DEFAULT_VERIFICATION_MODE);
         setGithubInput("");
-        setFetchedFiles([]);
+        setUseKnowledgeBase(false);
+        setCodeIndexEnabled(false);
         setBddScenarios([]);
         setVerificationResults([]);
         setVerificationSummary(null);
+        setVerificationPlan(null);
     };
 
     return (
@@ -106,6 +129,8 @@ export function SessionProvider({ children }: { children: ReactNode }) {
                 setSessionId,
                 jiraTicketId,
                 setJiraTicketId,
+                jiraTicketUrl,
+                setJiraTicketUrl,
                 acceptanceCriteria,
                 setAcceptanceCriteria,
                 bddContent,
@@ -124,14 +149,18 @@ export function SessionProvider({ children }: { children: ReactNode }) {
                 setVerificationMode,
                 githubInput,
                 setGithubInput,
-                fetchedFiles,
-                setFetchedFiles,
+                useKnowledgeBase,
+                setUseKnowledgeBase,
+                codeIndexEnabled,
+                setCodeIndexEnabled,
                 bddScenarios,
                 setBddScenarios,
                 verificationResults,
                 setVerificationResults,
                 verificationSummary,
                 setVerificationSummary,
+                verificationPlan,
+                setVerificationPlan,
                 resetSession,
             }}
         >

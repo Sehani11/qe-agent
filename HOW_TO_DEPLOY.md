@@ -131,7 +131,7 @@ bash cfn/bootstrap.sh    # = setup-infra.sh + deploy.sh
 |---|---|---|---|
 | AWS CLI creds | `AWS_CLI_ACCESS_KEY_ID` | root `.env` | `~/.aws/credentials` (your laptop only) |
 | Frontend (`NEXT_PUBLIC_*`) | `NEXT_PUBLIC_API_URL` | CFN output + `.env` → `--build-arg` at `docker build` | baked into the Next.js bundle inside the Docker image |
-| Backend env | `LLM_API_KEY`, `SUPABASE_*`, etc. | root `.env` → SSM `/qe-agent/env/*` (SecureString) | loaded by `/opt/qe-agent/run-backend.sh` at container start |
+| Backend env | `OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, `SUPABASE_*`, etc. | root `.env` → SSM `/qe-agent/env/*` (SecureString) | loaded by `/opt/qe-agent/run-backend.sh` at container start |
 
 The deployed backend container **never sees your local `.env`** directly — it reads from SSM at start. Local and cloud are kept fully separate.
 

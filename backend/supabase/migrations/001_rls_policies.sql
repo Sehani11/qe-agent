@@ -14,6 +14,8 @@ ALTER TABLE sessions ENABLE ROW LEVEL SECURITY;
 ALTER TABLE bdd_files ENABLE ROW LEVEL SECURITY;
 ALTER TABLE chat_messages ENABLE ROW LEVEL SECURITY;
 ALTER TABLE verification_results ENABLE ROW LEVEL SECURITY;
+ALTER TABLE training_datasets ENABLE ROW LEVEL SECURITY;
+ALTER TABLE evaluation_results ENABLE ROW LEVEL SECURITY;
 
 -- sessions: users can only see/modify their own sessions
 CREATE POLICY "sessions_user_isolation" ON sessions
@@ -29,4 +31,12 @@ CREATE POLICY "chat_messages_user_isolation" ON chat_messages
 
 -- verification_results: users can only see/modify their own results
 CREATE POLICY "verification_results_user_isolation" ON verification_results
+  FOR ALL USING (auth.uid()::text = user_id);
+
+-- training_datasets: users can only see/modify their own uploaded corpora (Story 6.7)
+CREATE POLICY "training_datasets_user_isolation" ON training_datasets
+  FOR ALL USING (auth.uid()::text = user_id);
+
+-- evaluation_results: users can only see/modify their own evaluation runs (Story 6.3)
+CREATE POLICY "evaluation_results_user_isolation" ON evaluation_results
   FOR ALL USING (auth.uid()::text = user_id);

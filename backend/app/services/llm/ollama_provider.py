@@ -6,11 +6,13 @@ from collections.abc import Awaitable, Callable
 
 import httpx
 
-from app.services.llm.provider import LLMProvider, LLMProviderError
+from app.services.llm.provider import LLMProvider, LLMProviderError, ToolLoopStats
 
 
 class OllamaProvider(LLMProvider):
     """Local Ollama provider implementation."""
+
+    supports_tools = False
 
     def __init__(self, base_url: str, model: str) -> None:
         self._base_url = base_url.rstrip("/")
@@ -20,6 +22,10 @@ class OllamaProvider(LLMProvider):
             raise LLMProviderError("Ollama base URL is missing. Check OLLAMA_BASE_URL.")
         if not self._model:
             raise LLMProviderError("Ollama model is missing. Check OLLAMA_MODEL.")
+
+    @property
+    def model(self) -> str:
+        return self._model
 
     async def generate(self, prompt: str, system_prompt: str = "") -> str:
         """Generate text using the Ollama HTTP API."""
@@ -115,5 +121,7 @@ class OllamaProvider(LLMProvider):
         tools: list[dict],
         tool_executor: Callable[[str, dict], Awaitable[str]],
         max_tool_rounds: int = 10,
+        stats: ToolLoopStats | None = None,
+        tool_result_window: int = 0,
     ) -> str:
         raise LLMProviderError("generate_with_tools not implemented for Ollama provider")

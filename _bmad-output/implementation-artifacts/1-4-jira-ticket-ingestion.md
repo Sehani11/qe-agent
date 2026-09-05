@@ -2,6 +2,8 @@
 
 Status: done
 
+> **Amended 2026-08-22** ([maintenance record](maintenance-2026-08-22-verification-and-rag-hardening.md)): The submitted ticket reference (URL or key) is now persisted as `sessions.jira_ticket_url` (migration `f6b7c8d9e0a1`) and echoed in `IngestResponse.jira_ticket_url`, so the ticket field survives revisits instead of clearing after fetch.
+
 <!-- Note: Validation is optional. Run validate-create-story for quality check before dev-story. -->
 
 ## Story

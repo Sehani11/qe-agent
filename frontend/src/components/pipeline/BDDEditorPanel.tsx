@@ -5,14 +5,20 @@ import React, { useRef } from "react";
 import { useParams } from "next/navigation";
 import { Monaco } from "@monaco-editor/react";
 import { useSessionContext } from "@/context/SessionContext";
-import { Download, Upload, FileText } from "lucide-react";
+import { Check, Download, FileText, Save, Upload } from "lucide-react";
 import { useBDDUpload } from "@/lib/hooks/useBDDUpload";
+import { useBDDSave } from "@/lib/hooks/useBDDSave";
+import { Button } from "@/components/ui/button";
+import { ConfirmModal } from "@/components/ui/confirm-modal";
+import { InlineLoader } from "@/components/ui/loaders";
+import { useToast } from "@/components/ui/toast";
+import { useTheme } from "@/providers/ThemeProvider";
 
 const MonacoEditor = dynamic(() => import("@monaco-editor/react"), {
     ssr: false,
     loading: () => (
-        <div className="flex h-full min-h-[420px] items-center justify-center bg-sky-50/60 p-6 text-sm text-slate-500">
-            Loading editor...
+        <div className="flex h-full min-h-[420px] items-center justify-center bg-surface-raised p-6">
+            <InlineLoader>Loading editor</InlineLoader>
         </div>
     ),
 });
@@ -33,7 +39,26 @@ export default function BDDEditorPanel() {
     const [uploadError, setUploadError] = React.useState<string | null>(null);
     const [isUploading, setIsUploading] = React.useState(false);
     const [isMobile, setIsMobile] = React.useState(false);
+    const [isConfirmingUpload, setIsConfirmingUpload] = React.useState(false);
     const uploadBDD = useBDDUpload();
+    const saveBDD = useBDDSave();
+    const toast = useToast();
+    const { resolved: themeMode } = useTheme();
+
+    // Story 6.4 — a human correcting generated BDD is the single most valuable
+    // training signal, and it is lost the moment the page unloads.
+    //
+    // Dirtiness is tracked from ACTUAL keystrokes, not by comparing against a
+    // baseline. `bddContent` is populated externally on generation and on
+    // session load, so a content-comparison approach would report "dirty"
+    // immediately and let the user save untouched model output as a human
+    // correction — poisoning the dataset with rows whose "correction" equals
+    // their parent. Only edits made in this editor count.
+    const [hasUserEdited, setHasUserEdited] = React.useState(false);
+    const [isSaving, setIsSaving] = React.useState(false);
+    const [justSaved, setJustSaved] = React.useState(false);
+
+    const isDirty = bddContent.trim().length > 0 && hasUserEdited;
 
     React.useEffect(() => {
         const check = () => setIsMobile(window.innerWidth < 768);
@@ -56,8 +81,29 @@ export default function BDDEditorPanel() {
         }
     }, [bddContent]);
 
+    const openFilePicker = () => {
+        setIsConfirmingUpload(false);
+        fileInputRef.current?.click();
+    };
+
+    // Uploading replaces whatever is in the editor, and an unsaved human edit
+    // is not recoverable — so the picker only opens unprompted when there is
+    // nothing to overwrite.
+    const handleUploadClick = () => {
+        if (bddContent.trim().length > 0) {
+            setIsConfirmingUpload(true);
+            return;
+        }
+        openFilePicker();
+    };
+
     const handleEditorChange = (value: string | undefined) => {
         if (value !== undefined) {
+            // Only a keystroke in the editor marks content as a human edit.
+            if (value !== bddContent) {
+                setHasUserEdited(true);
+                setJustSaved(false);
+            }
             setBddContent(value);
         }
     };
@@ -68,6 +114,47 @@ export default function BDDEditorPanel() {
 
     const handleEditorDidMount = (editor: unknown) => {
         editorRef.current = editor;
+    };
+
+    const handleSave = async () => {
+        const targetSessionId = sessionId ?? routeSessionId;
+        if (!targetSessionId) {
+            setUploadError("No session URL is available to save this edit to.");
+            return;
+        }
+
+        setIsSaving(true);
+        try {
+            await saveBDD.mutateAsync({
+                session_id: targetSessionId,
+                content: bddContent,
+            });
+            // Persisted — further saves need a fresh edit, so an unchanged
+            // document cannot be recorded twice as a correction.
+            setHasUserEdited(false);
+            setUploadError(null);
+            setJustSaved(true);
+            toast.success("Scenarios saved", {
+                description: "Your edits are recorded against this session.",
+            });
+        } catch (err) {
+            const detail =
+                typeof err === "object" && err !== null && "response" in err
+                    ? (err as { response?: { data?: { detail?: string; message?: string } } })
+                          .response?.data?.detail ??
+                      (err as { response?: { data?: { detail?: string; message?: string } } })
+                          .response?.data?.message
+                    : err instanceof Error
+                      ? err.message
+                      : null;
+            const message = `Saving your edits failed${detail ? `: ${detail}` : "."}`;
+            setUploadError(message);
+            toast.error("Save failed", {
+                description: detail ?? "The server rejected the edit. Try again.",
+            });
+        } finally {
+            setIsSaving(false);
+        }
     };
 
     const downloadBlob = (content: string, filename: string, mimeType: string) => {
@@ -85,6 +172,7 @@ export default function BDDEditorPanel() {
     const handleDownloadFeature = () => {
         const filename = `${sessionId || "bdd"}.feature`;
         downloadBlob(bddContent, filename, "text/plain;charset=utf-8");
+        toast.success("Feature file exported", { description: filename });
     };
 
     const handleDownloadCSV = () => {
@@ -145,6 +233,8 @@ export default function BDDEditorPanel() {
             const csvHeader = "Feature,Scenario,Given,When,Then,Expected Result\n";
             downloadBlob(csvHeader + rows.map(r => r.map(escapeCSV).join(",")).join("\n"), `${sessionId || "bdd"}.csv`, "text/csv;charset=utf-8");
         }
+
+        toast.success("CSV exported", { description: `${sessionId || "bdd"}.csv` });
     };
 
     const handleUploadFeature = async (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -188,6 +278,10 @@ export default function BDDEditorPanel() {
             // subsequent operations (verification, generation) know about it.
             setSessionId(response.session_id);
             setJiraTicketId(response.jira_ticket_id);
+            // The upload itself persisted this text, so it is not an edit.
+            setHasUserEdited(false);
+            setJustSaved(false);
+            toast.success("Feature file loaded", { description: file.name });
         } catch (err) {
             const detail =
                 typeof err === "object" && err !== null && "response" in err
@@ -201,6 +295,10 @@ export default function BDDEditorPanel() {
             setUploadError(
                 `File loaded locally, but saving to the server failed${detail ? `: ${detail}` : "."}`
             );
+            toast.error("Upload not saved", {
+                description:
+                    "The file is open in the editor but the server did not store it. Save again once you are back online.",
+            });
         } finally {
             setIsUploading(false);
             resetInput();
@@ -208,17 +306,18 @@ export default function BDDEditorPanel() {
     };
 
     return (
-        <div className="flex flex-col overflow-hidden rounded-3xl border border-sky-100 bg-white shadow-[0_20px_70px_-30px_rgba(37,99,235,0.16)]">
-            <div className="flex flex-col border-b border-slate-200 bg-white">
-                <div className="flex items-center justify-between px-5 py-4">
-                    <div className="flex items-center space-x-3">
-                        <div>
-                            <h2 className="text-base font-semibold tracking-wide text-slate-900">BDD Scenario Editor</h2>
-                            <p className="text-sm text-slate-500">Review, refine, and download generated Gherkin scenarios.</p>
-                        </div>
+        <div className="flex flex-col overflow-hidden rounded-lg border border-rule bg-card">
+            <div className="flex flex-col border-b border-rule">
+                <div className="flex flex-wrap items-start justify-between gap-3 px-4 py-3.5">
+                    <div className="min-w-0">
+                        <p className="eyebrow text-muted-foreground">Feature</p>
+                        <h2 className="mt-1 text-base">BDD Scenario Editor</h2>
+                        <p className="mt-1 text-[0.8125rem] text-muted-foreground">
+                            Edit the generated Gherkin, then export it or verify it against code.
+                        </p>
                     </div>
 
-                    <div className="flex items-center space-x-2">
+                    <div className="flex flex-wrap items-center gap-1.5">
                         <input
                             type="file"
                             accept=".feature"
@@ -226,38 +325,66 @@ export default function BDDEditorPanel() {
                             onChange={handleUploadFeature}
                             className="hidden"
                         />
-                        <button
-                            onClick={() => fileInputRef.current?.click()}
-                            className="flex items-center space-x-1.5 rounded-xl border border-sky-200 bg-sky-50 px-3 py-2 text-xs font-semibold text-sky-800 transition-colors hover:bg-sky-100"
+                        <Button
+                            variant="outline"
+                            size="sm"
+                            onClick={handleUploadClick}
+                            loading={isUploading}
                         >
-                            <Upload className="w-3.5 h-3.5" />
+                            {!isUploading && <Upload className="h-3.5 w-3.5" aria-hidden="true" />}
                             <span>Upload</span>
-                        </button>
+                        </Button>
 
-                        <button
+                        <Button
+                            variant={justSaved ? "outline" : "default"}
+                            size="sm"
+                            onClick={handleSave}
+                            data-testid="save-bdd-button"
+                            loading={isSaving}
+                            disabled={!isDirty || isSaving}
+                        >
+                            {!isSaving &&
+                                (justSaved ? (
+                                    <Check className="h-3.5 w-3.5 text-pass" aria-hidden="true" />
+                                ) : (
+                                    <Save className="h-3.5 w-3.5" aria-hidden="true" />
+                                ))}
+                            <span>{isSaving ? "Saving…" : justSaved ? "Saved" : "Save"}</span>
+                        </Button>
+
+                        <Button
+                            variant="outline"
+                            size="sm"
                             onClick={handleDownloadFeature}
-                            className="flex items-center space-x-1.5 rounded-xl border border-blue-200 bg-blue-50 px-3 py-2 text-xs font-semibold text-blue-800 transition-colors hover:bg-blue-100"
                             disabled={!bddContent}
                         >
-                            <FileText className="w-3.5 h-3.5" />
+                            <FileText className="h-3.5 w-3.5" aria-hidden="true" />
                             <span>.feature</span>
-                        </button>
+                        </Button>
 
-                        <button
+                        <Button
+                            variant="outline"
+                            size="sm"
                             onClick={handleDownloadCSV}
-                            className="flex items-center space-x-1.5 rounded-xl border border-indigo-200 bg-indigo-50 px-3 py-2 text-xs font-semibold text-indigo-800 transition-colors hover:bg-indigo-100 disabled:opacity-50"
                             disabled={!bddContent || isUploading}
                         >
-                            <Download className="w-3.5 h-3.5" />
+                            <Download className="h-3.5 w-3.5" aria-hidden="true" />
                             <span>CSV</span>
-                        </button>
+                        </Button>
                     </div>
                 </div>
 
                 {uploadError && (
-                    <div className="test-upload-error flex items-center justify-between border-b border-rose-200 bg-rose-50 px-5 py-3 text-xs font-medium text-rose-700">
-                        <span>{uploadError}</span>
-                        <button onClick={() => setUploadError(null)} className="hover:text-rose-900">
+                    <div
+                        className="test-upload-error gutter-rule flex items-center justify-between gap-3 border-t border-rule bg-fail-soft/60 px-4 py-2.5"
+                        data-signal="fail"
+                        role="alert"
+                    >
+                        <span className="text-xs text-foreground">{uploadError}</span>
+                        <button
+                            onClick={() => setUploadError(null)}
+                            className="shrink-0 font-mono text-xs font-semibold text-muted-foreground transition-colors hover:text-foreground"
+                        >
                             Dismiss
                         </button>
                     </div>
@@ -268,10 +395,11 @@ export default function BDDEditorPanel() {
             {isMobile ? (
                 <textarea
                     value={bddContent}
-                    onChange={(e) => setBddContent(e.target.value)}
-                    placeholder="BDD scenarios will appear here after generation…"
+                    onChange={(e) => handleEditorChange(e.target.value)}
+                    placeholder="Scenarios appear here once you generate or upload them…"
                     spellCheck={false}
-                    className="w-full resize-none bg-sky-50 p-4 font-mono text-sm text-slate-900 outline-none focus:bg-white"
+                    aria-label="BDD scenarios"
+                    className="w-full resize-none bg-surface-raised p-4 font-mono text-sm text-foreground outline-none placeholder:text-muted-foreground/70 focus:bg-card"
                     style={{ minHeight: "320px" }}
                 />
             ) : (
@@ -281,25 +409,43 @@ export default function BDDEditorPanel() {
                     // library's default-URI model, so the previous session's
                     // content survives navigation to a new session.
                     path={`session-${routeSessionId ?? sessionId ?? "anon"}.feature`}
-                    height="calc(100vh - 224px)"
+                    height="calc(100vh - 260px)"
                     defaultLanguage="gherkin"
-                    theme="gherkin-light"
+                    theme={themeMode === "dark" ? "gherkin-dark" : "gherkin-light"}
                     value={bddContent}
                     beforeMount={handleEditorBeforeMount}
                     onChange={handleEditorChange}
                     onMount={handleEditorDidMount}
                     options={{
                         minimap: { enabled: false },
-                        fontSize: 14,
+                        fontSize: 13.5,
+                        fontFamily:
+                            "var(--font-jetbrains-mono), ui-monospace, SFMono-Regular, monospace",
                         wordWrap: "on",
                         scrollBeyondLastLine: false,
                         padding: { top: 16, bottom: 16 },
                         readOnly: false,
                         lineNumbersMinChars: 3,
                         folding: true,
+                        renderLineHighlight: "line",
+                        smoothScrolling: true,
                     }}
                 />
             )}
+
+            <ConfirmModal
+                open={isConfirmingUpload}
+                title="Replace the current scenarios?"
+                description={
+                    isDirty
+                        ? "The editor has unsaved edits. Uploading a .feature file overwrites them and they cannot be recovered."
+                        : "Uploading a .feature file replaces everything currently in the editor."
+                }
+                confirmLabel="Choose file"
+                destructive
+                onConfirm={openFilePicker}
+                onCancel={() => setIsConfirmingUpload(false)}
+            />
         </div>
     );
 }
@@ -328,23 +474,50 @@ function registerGherkinLanguage(monaco: Monaco) {
         },
     });
 
+    // The editor themes track the app palette: structural keywords take the
+    // keyword violet, step keywords the pass green, so the editor reads with
+    // the same colour language as the verdicts beside it.
     monaco.editor.defineTheme("gherkin-light", {
         base: "vs",
         inherit: true,
         colors: {
-            "editor.background": "#eff6ff",
-            "editor.lineHighlightBackground": "#dbeafe",
-            "editorLineNumber.foreground": "#94a3b8",
-            "editorCursor.foreground": "#0f172a",
+            "editor.background": "#FFFFFF",
+            "editor.lineHighlightBackground": "#F5F5F2",
+            "editorLineNumber.foreground": "#A9ABA6",
+            "editorLineNumber.activeForeground": "#16181D",
+            "editorCursor.foreground": "#16181D",
+            "editorIndentGuide.background1": "#EAEAE6",
         },
         rules: [
-            { token: "keyword", foreground: "2563eb", fontStyle: "bold" },
-            { token: "type", foreground: "1d4ed8", fontStyle: "bold" },
-            { token: "comment", foreground: "64748b" },
-            { token: "annotation", foreground: "4f46e5" },
-            { token: "string", foreground: "1e40af" },
-            { token: "variable", foreground: "2563eb" },
-            { token: "delimiter", foreground: "94a3b8" },
+            { token: "keyword", foreground: "5B3FC4", fontStyle: "bold" },
+            { token: "type", foreground: "1F7A4D", fontStyle: "bold" },
+            { token: "comment", foreground: "8A8D88", fontStyle: "italic" },
+            { token: "annotation", foreground: "A8710C" },
+            { token: "string", foreground: "B4342A" },
+            { token: "variable", foreground: "5B3FC4" },
+            { token: "delimiter", foreground: "A9ABA6" },
+        ],
+    });
+
+    monaco.editor.defineTheme("gherkin-dark", {
+        base: "vs-dark",
+        inherit: true,
+        colors: {
+            "editor.background": "#23262B",
+            "editor.lineHighlightBackground": "#2A2E34",
+            "editorLineNumber.foreground": "#6A7079",
+            "editorLineNumber.activeForeground": "#E8E8E4",
+            "editorCursor.foreground": "#E8E8E4",
+            "editorIndentGuide.background1": "#33373D",
+        },
+        rules: [
+            { token: "keyword", foreground: "A594F0", fontStyle: "bold" },
+            { token: "type", foreground: "5FCF94", fontStyle: "bold" },
+            { token: "comment", foreground: "8A9098", fontStyle: "italic" },
+            { token: "annotation", foreground: "E0A33A" },
+            { token: "string", foreground: "F0847A" },
+            { token: "variable", foreground: "A594F0" },
+            { token: "delimiter", foreground: "6A7079" },
         ],
     });
 }

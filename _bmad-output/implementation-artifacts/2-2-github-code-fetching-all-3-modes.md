@@ -2,6 +2,8 @@
 
 Status: done
 
+> **Amended 2026-08-22** ([maintenance record](maintenance-2026-08-22-verification-and-rag-hardening.md)): The `/verification/fetch` endpoint, `fetch_github_code` dispatcher and `fetch_full_repo` this story built were REMOVED with the legacy two-step flow — the UI is agentic-only (Story 2.5). `fetch_exact_files_resolved` and `fetch_pull_request` survive as the agentic path's evidence fetchers, now with slash-ref resolution, PR pagination, and head-SHA links. Read this story as history, not as the current API surface.
+
 ## Story
 
 As a **user** (stubbed as `DEV_USER_ID` in this epic),

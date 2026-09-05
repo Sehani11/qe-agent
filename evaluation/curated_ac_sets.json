@@ -1,0 +1,72 @@
+{
+  "_comment": [
+    "Curated product-domain acceptance-criteria sets for Story 6.3's evaluation.",
+    "",
+    "PROVENANCE — read before using these numbers. These are 'agent_authored':",
+    "written by the dev agent for this evaluation. They are NOT human-authored,",
+    "and they are NOT real Jira tickets. What they are is ON-DOMAIN: they",
+    "describe product behaviour of the kind this application converts from Jira",
+    "tickets, which the Story 6.5 training corpus almost entirely lacked (84% of",
+    "it was testing-framework Gherkin about running CLI commands).",
+    "",
+    "They carry NO reference Gherkin, so reference-similarity scoring does not",
+    "apply to them — only the structural metrics and the blinded judge. Report",
+    "them as their own group; do not average them with the holdout.",
+    "",
+    "Replace these with real Jira tickets as soon as the app has been used on",
+    "20+. That would upgrade provenance from agent_authored to human_jira and is",
+    "the single biggest available improvement to this evaluation's validity."
+  ],
+  "items": [
+    {
+      "id": "curated-01-password-reset",
+      "domain": "authentication",
+      "acceptance_criteria": "AC1: A registered user can request a password reset link by submitting their email address.\nAC2: A reset link expires one hour after it is issued, and using an expired link shows an explanatory message rather than a generic error.\nAC3: Requesting a reset for an email address that is not registered returns the same confirmation as a registered one, so the response does not reveal whether an account exists."
+    },
+    {
+      "id": "curated-02-login-lockout",
+      "domain": "authentication",
+      "acceptance_criteria": "AC1: A user who enters an incorrect password five times in a row within fifteen minutes is locked out for thirty minutes.\nAC2: A successful login resets the failed-attempt counter to zero.\nAC3: A locked-out user attempting to log in is told when the lockout expires."
+    },
+    {
+      "id": "curated-03-card-payment",
+      "domain": "payments",
+      "acceptance_criteria": "AC1: A customer can pay for an order with a saved card without re-entering the card number.\nAC2: If the payment provider declines the card, the order remains unpaid and the customer sees the decline reason.\nAC3: A payment that succeeds at the provider but times out before confirmation is reconciled automatically and is never charged twice."
+    },
+    {
+      "id": "curated-04-refund-window",
+      "domain": "payments",
+      "acceptance_criteria": "AC1: A customer can request a full refund within thirty days of purchase.\nAC2: A refund request after thirty days is rejected with the purchase date shown.\nAC3: A partially refunded order cannot be refunded again beyond its remaining balance."
+    },
+    {
+      "id": "curated-05-search-filters",
+      "domain": "search",
+      "acceptance_criteria": "AC1: A user can filter search results by category and by price range simultaneously.\nAC2: Clearing all filters restores the unfiltered result set without losing the search term.\nAC3: A filter combination that matches nothing shows an empty state suggesting which filter to relax."
+    },
+    {
+      "id": "curated-06-file-upload",
+      "domain": "file management",
+      "acceptance_criteria": "AC1: A user can upload a PDF or DOCX file up to 10 MB to a project.\nAC2: A file exceeding 10 MB is rejected before upload begins, with the limit stated.\nAC3: An unsupported file type is rejected and the list of supported types is shown.\nAC4: An upload interrupted by a lost connection can be retried without creating a duplicate."
+    },
+    {
+      "id": "curated-07-role-permissions",
+      "domain": "authorization",
+      "acceptance_criteria": "AC1: A workspace administrator can change another member's role between viewer, editor and administrator.\nAC2: An administrator cannot remove their own administrator role if they are the only administrator left.\nAC3: A viewer who attempts to edit a document is shown a read-only notice instead of an editor."
+    },
+    {
+      "id": "curated-08-notification-prefs",
+      "domain": "notifications",
+      "acceptance_criteria": "AC1: A user can turn email notifications on or off per notification type.\nAC2: Turning off all notification types stops all emails except security alerts, which cannot be disabled.\nAC3: A preference change takes effect for notifications generated after the change, not retroactively."
+    },
+    {
+      "id": "curated-09-scheduling-conflict",
+      "domain": "scheduling",
+      "acceptance_criteria": "AC1: A user can book a meeting room for a time slot that is currently free.\nAC2: Booking a slot that overlaps an existing booking is refused and the conflicting booking's time is shown.\nAC3: Two users submitting a booking for the same free slot at the same moment result in exactly one booking, and the loser is told the slot was taken."
+    },
+    {
+      "id": "curated-10-api-rate-limit",
+      "domain": "api",
+      "acceptance_criteria": "AC1: An API client may make up to 100 requests per minute per API key.\nAC2: A request beyond the limit is rejected with HTTP 429 and a header stating when the limit resets.\nAC3: Rate-limit counters are tracked per API key, so one client exhausting its quota does not affect another."
+    }
+  ]
+}

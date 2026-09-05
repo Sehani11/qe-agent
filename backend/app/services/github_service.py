@@ -1,9 +1,13 @@
 """GitHub code fetching service.
 
-Supports three source modes for the verification pipeline:
-  - exact_files: fetch specific files by GitHub blob URL
-  - full_repo:   fetch all text files in a repository (capped at 100)
-  - pull_request: fetch PR diff/patch for changed files
+Fetches the code evidence for agentic verification:
+  - exact_files: fetch specific files by GitHub blob URL (slash-containing
+    branch names are resolved via the matching-refs API)
+  - pull_request: fetch PR diff/patch for changed files (paginated up to
+    GitHub's 3 000-file listing limit), plus the PR head SHA for ref pinning
+
+full_repo mode needs no prefetch — the agent explores the repository through
+its GitHub tools.
 
 All public functions raise GitHubServiceError on failure.
 GitHub API 429 responses are retried with exponential backoff (3 retries).
@@ -12,30 +16,13 @@ GitHub API 429 responses are retried with exponential backoff (3 retries).
 import asyncio
 import base64
 import re
-from pathlib import PurePosixPath
+from urllib.parse import quote
 
 import httpx
 
 from app.schemas.verification import FetchedFile
 
 GITHUB_API_BASE = "https://api.github.com"
-
-# File size cap for full-repo fetches (512 KB)
-_MAX_FILE_SIZE_BYTES = 524_288
-
-# Maximum number of files fetched in full-repo mode
-_MAX_REPO_FILES = 100
-
-# Extensions that are not useful for code verification
-_BINARY_EXTENSIONS = {
-    ".png", ".jpg", ".jpeg", ".gif", ".svg", ".ico",
-    ".woff", ".woff2", ".ttf", ".eot", ".otf",
-    ".pdf", ".zip", ".gz", ".tar", ".bz2",
-    ".bin", ".exe", ".dll", ".so", ".dylib",
-    ".pyc", ".pyo", ".class",
-    ".lock",
-}
-
 
 class GitHubServiceError(Exception):
     """Raised when a GitHub API interaction fails."""
@@ -92,11 +79,11 @@ def _parse_github_blob_url(url: str) -> tuple[str, str, str, str]:
     Accepted formats:
       https://github.com/org/repo/blob/main/src/auth.py
 
-    Known limitation: the ref segment is captured as a single path component
-    (no slashes). Branch names containing slashes (e.g. feature/my-branch)
-    are not supported — only the first component is captured as ref, and the
-    remainder becomes part of the file path. Such URLs will produce a 404 from
-    the GitHub API. MVP scope only supports simple branch/tag/SHA refs.
+    The ref segment is captured as a single path component. Branch names
+    containing slashes (e.g. feature/my-branch) therefore mis-split here;
+    fetch_exact_files_resolved recovers by resolving the real branch via the
+    matching-refs API when the first-segment fetch 404s. Slashed TAG names
+    remain unsupported (matching-refs is queried for heads only).
     """
     pattern = r"https?://github\.com/([^/]+)/([^/]+)/blob/([^/]+)/(.+)"
     match = re.match(pattern, url.strip())
@@ -143,24 +130,62 @@ def _parse_pr_url(url: str) -> tuple[str, str, int]:
     return owner, repo, int(pr_num)
 
 
-def _is_binary_path(path: str) -> bool:
-    suffix = PurePosixPath(path).suffix.lower()
-    return suffix in _BINARY_EXTENSIONS
+async def _resolve_slashed_ref(
+    client: httpx.AsyncClient,
+    headers: dict[str, str],
+    owner: str,
+    repo: str,
+    ref_and_path: str,
+) -> tuple[str, str] | None:
+    """Resolve a slash-containing branch name inside a blob URL.
+
+    ``ref_and_path`` is everything after ``/blob/`` (e.g.
+    ``feature/my-branch/src/auth.py``). Asks GitHub for every branch starting
+    with the first segment and picks the longest one that prefixes the string;
+    the remainder is the file path. Returns None when no multi-segment branch
+    matches (plain ref, tag, or SHA — the caller's original split stands).
+    """
+    first_segment = ref_and_path.split("/", 1)[0]
+    url = f"{GITHUB_API_BASE}/repos/{owner}/{repo}/git/matching-refs/heads/{quote(first_segment, safe='')}"
+    resp = await _github_get(client, url, headers)
+    if not resp.is_success:
+        return None
+
+    branches = [
+        item["ref"].removeprefix("refs/heads/")
+        for item in resp.json()
+        if isinstance(item, dict) and item.get("ref", "").startswith("refs/heads/")
+    ]
+    # Longest match wins: with branches "feature" and "feature/my-branch" both
+    # present, the URL's own segmentation is only recoverable greedily.
+    best = max(
+        (b for b in branches if "/" in b and ref_and_path.startswith(b + "/")),
+        key=len,
+        default=None,
+    )
+    if best is None:
+        return None
+    return best, ref_and_path[len(best) + 1 :]
 
 
 # ---------------------------------------------------------------------------
 # Public fetch functions
 # ---------------------------------------------------------------------------
 
-async def fetch_exact_files(paths_input: str, pat: str) -> list[FetchedFile]:
-    """Fetch specific files from GitHub by blob URL.
+async def fetch_exact_files_resolved(
+    paths_input: str, pat: str
+) -> tuple[list[FetchedFile], str]:
+    """Fetch specific files by blob URL; also return the first URL's resolved ref.
+
+    The resolved ref is what agentic verification pins its GitHub tools to, so
+    it must reflect slash-ref resolution — the raw URL split may be wrong.
 
     Args:
         paths_input: Newline-separated GitHub blob URLs.
         pat:         GitHub personal access token.
 
     Returns:
-        List of FetchedFile with decoded content.
+        (files, first_ref): decoded files and the resolved ref of the first URL.
 
     Raises:
         GitHubServiceError: On any fetch failure.
@@ -173,6 +198,7 @@ async def fetch_exact_files(paths_input: str, pat: str) -> list[FetchedFile]:
         raise GitHubServiceError("No file URLs provided.")
 
     fetched: list[FetchedFile] = []
+    first_ref: str | None = None
 
     async with httpx.AsyncClient() as client:
         headers = _auth_headers(pat)
@@ -180,6 +206,17 @@ async def fetch_exact_files(paths_input: str, pat: str) -> list[FetchedFile]:
             owner, repo, ref, path = _parse_github_blob_url(url)
             api_url = f"{GITHUB_API_BASE}/repos/{owner}/{repo}/contents/{path}?ref={ref}"
             response = await _github_get(client, api_url, headers)
+
+            if response.status_code == 404:
+                # The single-segment ref split may have cut a slash-containing
+                # branch name in half. Resolve the real branch and retry once.
+                resolved = await _resolve_slashed_ref(
+                    client, headers, owner, repo, f"{ref}/{path}"
+                )
+                if resolved is not None:
+                    ref, path = resolved
+                    api_url = f"{GITHUB_API_BASE}/repos/{owner}/{repo}/contents/{path}?ref={quote(ref, safe='')}"
+                    response = await _github_get(client, api_url, headers)
 
             if response.status_code == 404:
                 raise GitHubServiceError(
@@ -201,114 +238,56 @@ async def fetch_exact_files(paths_input: str, pat: str) -> list[FetchedFile]:
                     f"Unexpected encoding '{encoding}' for '{path}'. Only base64 is supported."
                 )
 
+            if first_ref is None:
+                first_ref = ref
             content = _decode_base64_content(data["content"])
             github_url = f"https://github.com/{owner}/{repo}/blob/{ref}/{path}"
             fetched.append(FetchedFile(path=path, content=content, github_url=github_url))
 
-    return fetched
+    # lines is non-empty, so at least one iteration set first_ref
+    return fetched, first_ref or "HEAD"
 
 
-async def fetch_full_repo(repo_url: str, pat: str) -> list[FetchedFile]:
-    """Fetch all qualifying text files from a GitHub repository.
+async def _get_pr_head_sha(
+    client: httpx.AsyncClient,
+    headers: dict[str, str],
+    owner: str,
+    repo: str,
+    pr_number: int,
+) -> str:
+    """Return the head commit SHA of a pull request."""
+    resp = await _github_get(
+        client, f"{GITHUB_API_BASE}/repos/{owner}/{repo}/pulls/{pr_number}", headers
+    )
+    if resp.status_code == 404:
+        raise GitHubServiceError(
+            f"Pull request #{pr_number} not found in {owner}/{repo}"
+        )
+    if resp.status_code == 401:
+        raise GitHubServiceError("GitHub authentication failed. Check your PAT.")
+    if not resp.is_success:
+        raise GitHubServiceError(
+            f"GitHub API returned {resp.status_code} fetching PR #{pr_number}."
+        )
+    try:
+        return resp.json()["head"]["sha"]
+    except (KeyError, TypeError) as exc:
+        raise GitHubServiceError(
+            f"Unexpected response shape for PR #{pr_number} metadata."
+        ) from exc
 
-    Files larger than 512 KB and binary extensions are skipped.
-    Capped at 100 files.
 
-    Args:
-        repo_url: Full GitHub repository URL.
-        pat:      GitHub personal access token.
+async def get_pr_head_sha(pr_url: str, pat: str) -> str:
+    """Return the head commit SHA for a PR URL.
 
-    Returns:
-        List of FetchedFile with decoded content.
-
-    Raises:
-        GitHubServiceError: On any fetch failure.
+    Used by agentic verification to pin its GitHub tools to the PR's branch —
+    reading the default branch instead would judge code the PR doesn't contain.
     """
     if not pat:
         raise GitHubServiceError("GitHub PAT not configured.")
-
-    owner, repo = _parse_repo_url(repo_url)
-
+    owner, repo, pr_number = _parse_pr_url(pr_url)
     async with httpx.AsyncClient() as client:
-        headers = _auth_headers(pat)
-
-        # Fetch repo metadata to get the default branch name for link construction
-        repo_info_resp = await _github_get(
-            client, f"{GITHUB_API_BASE}/repos/{owner}/{repo}", headers
-        )
-        default_branch = "main"
-        if repo_info_resp.is_success:
-            default_branch = repo_info_resp.json().get("default_branch", "main")
-
-        # Step 1: fetch the recursive tree
-        tree_url = f"{GITHUB_API_BASE}/repos/{owner}/{repo}/git/trees/HEAD?recursive=1"
-        tree_resp = await _github_get(client, tree_url, headers)
-
-        if tree_resp.status_code == 404:
-            raise GitHubServiceError(f"Repository not found: {owner}/{repo}")
-        if tree_resp.status_code == 401:
-            raise GitHubServiceError("GitHub authentication failed. Check your PAT.")
-        if not tree_resp.is_success:
-            raise GitHubServiceError(
-                f"GitHub API returned {tree_resp.status_code} fetching repo tree."
-            )
-
-        tree_data = tree_resp.json()
-        is_truncated = tree_data.get("truncated", False)
-        all_items = tree_data.get("tree", [])
-
-        # Filter: blobs only, no binary, within size limit
-        qualifying = [
-            item
-            for item in all_items
-            if (
-                item.get("type") == "blob"
-                and not _is_binary_path(item.get("path", ""))
-                and item.get("size", 0) <= _MAX_FILE_SIZE_BYTES
-            )
-        ][:_MAX_REPO_FILES]
-
-        if not qualifying:
-            raise GitHubServiceError(
-                f"No qualifying text files found in {owner}/{repo}."
-            )
-
-        # Step 2: fetch content for each qualifying file
-        fetched: list[FetchedFile] = []
-        for item in qualifying:
-            path = item["path"]
-            contents_url = f"{GITHUB_API_BASE}/repos/{owner}/{repo}/contents/{path}"
-            file_resp = await _github_get(client, contents_url, headers)
-
-            if not file_resp.is_success:
-                # Skip files that can't be fetched rather than aborting entirely
-                continue
-
-            data = file_resp.json()
-            if data.get("encoding") != "base64" or "content" not in data:
-                continue
-
-            content = _decode_base64_content(data["content"])
-            github_url = f"https://github.com/{owner}/{repo}/blob/{default_branch}/{path}"
-            fetched.append(FetchedFile(path=path, content=content, github_url=github_url))
-
-        # Surface truncation warning in the file list so callers know the
-        # result is incomplete. Story 2.3 should filter entries whose path
-        # starts with "[WARNING]" before passing them to the LLM.
-        if is_truncated:
-            fetched.insert(
-                0,
-                FetchedFile(
-                    path="[WARNING] GitHub repository tree was truncated — file list is incomplete",
-                    content=(
-                        "The GitHub API truncated the repository tree response. "
-                        "Not all files were fetched. Consider using Exact File Paths "
-                        "mode for large repositories."
-                    ),
-                ),
-            )
-
-    return fetched
+        return await _get_pr_head_sha(client, _auth_headers(pat), owner, repo, pr_number)
 
 
 async def fetch_pull_request(pr_url: str, pat: str) -> list[FetchedFile]:
@@ -333,24 +312,40 @@ async def fetch_pull_request(pr_url: str, pat: str) -> list[FetchedFile]:
 
     async with httpx.AsyncClient() as client:
         headers = _auth_headers(pat)
-        # per_page=100 is the GitHub maximum for this endpoint.
-        # PRs with more than 100 changed files are silently truncated — no
-        # pagination is performed (MVP scope). Surface a warning if needed.
-        api_url = f"{GITHUB_API_BASE}/repos/{owner}/{repo}/pulls/{pr_number}/files?per_page=100"
-        response = await _github_get(client, api_url, headers)
-
-        if response.status_code == 404:
-            raise GitHubServiceError(
-                f"Pull request #{pr_number} not found in {owner}/{repo}"
+        # Links must use the PR's head commit: blob/HEAD resolves to the default
+        # branch, which 404s for files that only exist on the PR branch.
+        head_sha = await _get_pr_head_sha(client, headers, owner, repo, pr_number)
+        # per_page=100 is the GitHub maximum for this endpoint; page through
+        # the listing. GitHub itself lists at most 3 000 files per PR, so the
+        # loop is bounded at 30 pages.
+        files: list[dict] = []
+        listing_truncated = False
+        for page in range(1, 31):
+            api_url = (
+                f"{GITHUB_API_BASE}/repos/{owner}/{repo}/pulls/{pr_number}/files"
+                f"?per_page=100&page={page}"
             )
-        if response.status_code == 401:
-            raise GitHubServiceError("GitHub authentication failed. Check your PAT.")
-        if not response.is_success:
-            raise GitHubServiceError(
-                f"GitHub API returned {response.status_code} fetching PR #{pr_number}."
-            )
+            response = await _github_get(client, api_url, headers)
 
-        files = response.json()
+            if response.status_code == 404:
+                raise GitHubServiceError(
+                    f"Pull request #{pr_number} not found in {owner}/{repo}"
+                )
+            if response.status_code == 401:
+                raise GitHubServiceError("GitHub authentication failed. Check your PAT.")
+            if not response.is_success:
+                raise GitHubServiceError(
+                    f"GitHub API returned {response.status_code} fetching PR #{pr_number}."
+                )
+
+            batch = response.json()
+            files.extend(batch)
+            if len(batch) < 100:
+                break
+        else:
+            # 30 full pages — GitHub's listing limit; more files may exist.
+            listing_truncated = True
+
         fetched: list[FetchedFile] = []
 
         for file_entry in files:
@@ -364,7 +359,7 @@ async def fetch_pull_request(pr_url: str, pat: str) -> list[FetchedFile]:
                 continue
 
             path = file_entry["filename"]
-            github_url = f"https://github.com/{owner}/{repo}/blob/HEAD/{path}"
+            github_url = f"https://github.com/{owner}/{repo}/blob/{head_sha}/{path}"
             fetched.append(FetchedFile(path=path, content=patch, github_url=github_url))
 
     if not fetched:
@@ -373,39 +368,16 @@ async def fetch_pull_request(pr_url: str, pat: str) -> list[FetchedFile]:
             "(all files were removed or binary)."
         )
 
-    return fetched
-
-
-# ---------------------------------------------------------------------------
-# Public entrypoint
-# ---------------------------------------------------------------------------
-
-async def fetch_github_code(
-    mode: str,
-    github_input: str,
-    pat: str,
-) -> list[FetchedFile]:
-    """Dispatch to the appropriate fetch strategy based on mode.
-
-    Args:
-        mode:         One of "exact_files", "full_repo", "pull_request".
-        github_input: User-supplied input (URLs or paths).
-        pat:          GitHub personal access token.
-
-    Returns:
-        List of FetchedFile.
-
-    Raises:
-        GitHubServiceError: On any failure.
-    """
-    if mode == "exact_files":
-        return await fetch_exact_files(github_input, pat)
-    elif mode == "full_repo":
-        return await fetch_full_repo(github_input, pat)
-    elif mode == "pull_request":
-        return await fetch_pull_request(github_input, pat)
-    else:
-        raise GitHubServiceError(
-            f"Unknown verification mode: '{mode}'.",
-            code="GITHUB_FETCH_FAILED",
+    if listing_truncated:
+        fetched.insert(
+            0,
+            FetchedFile(
+                path="[WARNING] PR file listing hit GitHub's 3 000-file limit — the diff set is incomplete",
+                content=(
+                    "GitHub lists at most 3 000 changed files per pull request. "
+                    "Files beyond that limit were not fetched."
+                ),
+            ),
         )
+
+    return fetched

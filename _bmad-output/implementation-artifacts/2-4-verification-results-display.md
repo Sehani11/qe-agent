@@ -2,6 +2,10 @@
 
 Status: done
 
+> **Amended 2026-08-22** ([maintenance record](maintenance-2026-08-22-ui-redesign-feature-file.md)): Every Tailwind class listed in this story's Visual Reference is superseded. Cards are `rounded-lg border border-rule bg-card` (hairline rules, no shadow); PASS/FAIL use the shared `VerdictBadge` on the `pass`/`fail` signal tokens with a glyph as well as a colour; the summary bar and each verdict row carry a `.gutter-rule` tinted by signal. Behaviour — progressive append, failed rows auto-expanded, passed rows collapsed — is unchanged.
+
+> **Amended 2026-08-22** ([maintenance record](maintenance-2026-08-22-verification-source-persistence.md)): The panel now renders a "Verified against" block above the results, listing the source the run was scoped to (repo URL, PR URL, or every file URL for exact-files mode). It is restored from the stored rows on session revisit, and hidden entirely for runs recorded before the source was persisted.
+
 <!-- Note: Validation is optional. Run validate-create-story for quality check before dev-story. -->
 
 ## Story

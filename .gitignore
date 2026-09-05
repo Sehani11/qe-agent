@@ -22,3 +22,21 @@ Thumbs.db
 .claude
 
 aws-credentials.txt
+
+# Python build artifacts (training/ sits outside backend/, so it needs this too)
+__pycache__/
+*.py[cod]
+
+# Story 6.5 — derived training data and cloned corpora are never committed.
+# train.jsonl can contain user-captured content, which Stories 6.6/6.7 exist to
+# govern; and third-party .feature files carry their own licences.
+training/data/
+training/data-v1/
+training/corpus/
+# corpus-product/ IS committed: the ticket YAML is authored by hand and is the
+# reviewable source of record. Only its generated .jsonl is derived.
+training/corpus-product/*.jsonl
+# Staging for the Kaggle push — holds a copy of train.jsonl.
+training/.kaggle-staging/
+# Trained adapters pulled back from Kaggle (161 MB safetensors).
+training/outputs/

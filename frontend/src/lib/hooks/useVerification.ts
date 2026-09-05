@@ -3,26 +3,36 @@
 import { useMutation } from "@tanstack/react-query";
 
 import apiClient from "@/lib/api/client";
-import type { VerificationMode, VerificationFetchResponse } from "@/lib/types/verification";
+import { filenameFromHeader, triggerBlobDownload } from "@/lib/download";
 
-interface VerificationFetchRequest {
-    session_id: string;
-    mode: VerificationMode;
-    github_input: string;
-}
+// ---------------------------------------------------------------------------
+// Story 5.4: Traceability report export (PDF / CSV)
+// ---------------------------------------------------------------------------
 
-async function fetchGitHubCode(
-    request: VerificationFetchRequest
-): Promise<VerificationFetchResponse> {
-    const response = await apiClient.post<VerificationFetchResponse>(
-        "/verification/fetch",
-        request
+async function exportReport(
+    sessionId: string,
+    format: "pdf" | "csv"
+): Promise<void> {
+    const response = await apiClient.get(`/reports/${sessionId}/export/${format}`, {
+        responseType: "blob",
+    });
+    const filename = filenameFromHeader(
+        response.headers["content-disposition"],
+        `${sessionId}_report.${format}`
     );
-    return response.data;
+    triggerBlobDownload(response.data as Blob, filename);
 }
 
-export function useVerification() {
+/** Download the session's traceability report as a PDF. */
+export function useExportReportPdf() {
     return useMutation({
-        mutationFn: fetchGitHubCode,
+        mutationFn: (sessionId: string) => exportReport(sessionId, "pdf"),
+    });
+}
+
+/** Download the session's traceability report as a CSV. */
+export function useExportReportCsv() {
+    return useMutation({
+        mutationFn: (sessionId: string) => exportReport(sessionId, "csv"),
     });
 }

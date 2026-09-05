@@ -4,40 +4,74 @@
 
 @custom-variant dark (&:is(.dark *));
 
+/* ---------------------------------------------------------------------------
+   Design language: "feature file"
+
+   The artifact at the centre of this product is a .feature file, so the UI
+   borrows that file's own vocabulary: a fixed-width keyword column, hairline
+   rules instead of drop shadows, monospace for anything the machine produced,
+   and a pass/fail signal pair as the primary palette rather than a decorative
+   brand hue. Boldness is spent in exactly one place — the keyword gutter that
+   runs down the left edge of every panel — and everything else stays quiet.
+--------------------------------------------------------------------------- */
+
 @theme inline {
+  /* shadcn/base-ui contract — remapped onto the palette below */
   --color-background: var(--background);
   --color-foreground: var(--foreground);
-  --font-sans: var(--font-poppins);
-  --font-mono: var(--font-geist-mono);
-  --color-sidebar-ring: var(--sidebar-ring);
-  --color-sidebar-border: var(--sidebar-border);
-  --color-sidebar-accent-foreground: var(--sidebar-accent-foreground);
-  --color-sidebar-accent: var(--sidebar-accent);
-  --color-sidebar-primary-foreground: var(--sidebar-primary-foreground);
-  --color-sidebar-primary: var(--sidebar-primary);
-  --color-sidebar-foreground: var(--sidebar-foreground);
-  --color-sidebar: var(--sidebar);
-  --color-chart-5: var(--chart-5);
-  --color-chart-4: var(--chart-4);
-  --color-chart-3: var(--chart-3);
-  --color-chart-2: var(--chart-2);
-  --color-chart-1: var(--chart-1);
-  --color-ring: var(--ring);
-  --color-input: var(--input);
-  --color-border: var(--border);
-  --color-destructive: var(--destructive);
-  --color-accent-foreground: var(--accent-foreground);
-  --color-accent: var(--accent);
-  --color-muted-foreground: var(--muted-foreground);
-  --color-muted: var(--muted);
-  --color-secondary-foreground: var(--secondary-foreground);
-  --color-secondary: var(--secondary);
-  --color-primary-foreground: var(--primary-foreground);
-  --color-primary: var(--primary);
-  --color-popover-foreground: var(--popover-foreground);
-  --color-popover: var(--popover);
-  --color-card-foreground: var(--card-foreground);
   --color-card: var(--card);
+  --color-card-foreground: var(--card-foreground);
+  --color-popover: var(--popover);
+  --color-popover-foreground: var(--popover-foreground);
+  --color-primary: var(--primary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-secondary: var(--secondary);
+  --color-secondary-foreground: var(--secondary-foreground);
+  --color-muted: var(--muted);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-accent: var(--accent);
+  --color-accent-foreground: var(--accent-foreground);
+  --color-destructive: var(--destructive);
+  --color-border: var(--border);
+  --color-input: var(--input);
+  --color-ring: var(--ring);
+  --color-chart-1: var(--chart-1);
+  --color-chart-2: var(--chart-2);
+  --color-chart-3: var(--chart-3);
+  --color-chart-4: var(--chart-4);
+  --color-chart-5: var(--chart-5);
+  --color-sidebar: var(--sidebar);
+  --color-sidebar-foreground: var(--sidebar-foreground);
+  --color-sidebar-primary: var(--sidebar-primary);
+  --color-sidebar-primary-foreground: var(--sidebar-primary-foreground);
+  --color-sidebar-accent: var(--sidebar-accent);
+  --color-sidebar-accent-foreground: var(--sidebar-accent-foreground);
+  --color-sidebar-border: var(--sidebar-border);
+  --color-sidebar-ring: var(--sidebar-ring);
+
+  /* Semantic surface tokens */
+  --color-paper: var(--paper);
+  --color-surface: var(--surface);
+  --color-surface-raised: var(--surface-raised);
+  --color-rule: var(--rule);
+  --color-rule-strong: var(--rule-strong);
+
+  /* Verification signals — the product's real palette */
+  --color-pass: var(--pass);
+  --color-pass-soft: var(--pass-soft);
+  --color-pass-ink: var(--pass-ink);
+  --color-fail: var(--fail);
+  --color-fail-soft: var(--fail-soft);
+  --color-fail-ink: var(--fail-ink);
+  --color-pending: var(--pending);
+  --color-pending-soft: var(--pending-soft);
+  --color-pending-ink: var(--pending-ink);
+  --color-keyword: var(--keyword);
+  --color-keyword-soft: var(--keyword-soft);
+
+  --font-sans: var(--font-instrument-sans);
+  --font-mono: var(--font-jetbrains-mono);
+
   --radius-sm: calc(var(--radius) * 0.6);
   --radius-md: calc(var(--radius) * 0.8);
   --radius-lg: var(--radius);
@@ -48,96 +82,377 @@
 }
 
 :root {
-  --background: oklch(1 0 0);
-  --foreground: oklch(0.145 0 0);
-  --card: oklch(1 0 0);
-  --card-foreground: oklch(0.145 0 0);
-  --popover: oklch(1 0 0);
-  --popover-foreground: oklch(0.145 0 0);
-  --primary: oklch(0.205 0 0);
-  --primary-foreground: oklch(0.985 0 0);
-  --secondary: oklch(0.97 0 0);
-  --secondary-foreground: oklch(0.205 0 0);
-  --muted: oklch(0.97 0 0);
-  --muted-foreground: oklch(0.556 0 0);
-  --accent: oklch(0.97 0 0);
-  --accent-foreground: oklch(0.205 0 0);
-  --destructive: oklch(0.58 0.22 27);
-  --border: oklch(0.922 0 0);
-  --input: oklch(0.922 0 0);
-  --ring: oklch(0.708 0 0);
-  --chart-1: oklch(0.809 0.105 251.813);
-  --chart-2: oklch(0.623 0.214 259.815);
-  --chart-3: oklch(0.546 0.245 262.881);
-  --chart-4: oklch(0.488 0.243 264.376);
-  --chart-5: oklch(0.424 0.199 265.638);
-  --radius: 0.625rem;
-  --sidebar: oklch(0.985 0 0);
-  --sidebar-foreground: oklch(0.145 0 0);
-  --sidebar-primary: oklch(0.205 0 0);
-  --sidebar-primary-foreground: oklch(0.985 0 0);
-  --sidebar-accent: oklch(0.97 0 0);
-  --sidebar-accent-foreground: oklch(0.205 0 0);
-  --sidebar-border: oklch(0.922 0 0);
-  --sidebar-ring: oklch(0.708 0 0);
+  /* Paper: a neutral printed-listing white, deliberately not cream. */
+  --paper: oklch(0.977 0.002 106);
+  --surface: oklch(1 0 0);
+  --surface-raised: oklch(0.992 0.001 106);
+  --rule: oklch(0.905 0.003 106);
+  --rule-strong: oklch(0.83 0.004 106);
+
+  --background: var(--paper);
+  --foreground: oklch(0.205 0.008 264);
+  --card: var(--surface);
+  --card-foreground: var(--foreground);
+  --popover: var(--surface);
+  --popover-foreground: var(--foreground);
+
+  --primary: oklch(0.235 0.009 264);
+  --primary-foreground: oklch(0.985 0.002 106);
+  --secondary: oklch(0.955 0.003 106);
+  --secondary-foreground: oklch(0.27 0.008 264);
+  --muted: oklch(0.955 0.003 106);
+  --muted-foreground: oklch(0.525 0.011 264);
+  --accent: oklch(0.945 0.004 106);
+  --accent-foreground: oklch(0.27 0.008 264);
+
+  /* Signals — green/red carry the brand because the product's whole job is
+     turning acceptance criteria into a verdict. */
+  --pass: oklch(0.525 0.126 156);
+  --pass-soft: oklch(0.955 0.032 156);
+  --pass-ink: oklch(0.395 0.108 156);
+  --fail: oklch(0.522 0.176 27);
+  --fail-soft: oklch(0.958 0.024 27);
+  --fail-ink: oklch(0.435 0.164 27);
+  --pending: oklch(0.605 0.126 72);
+  --pending-soft: oklch(0.962 0.038 84);
+  --pending-ink: oklch(0.475 0.104 72);
+  --keyword: oklch(0.455 0.168 285);
+  --keyword-soft: oklch(0.955 0.024 285);
+
+  --destructive: var(--fail);
+  --border: var(--rule);
+  --input: var(--rule);
+  --ring: oklch(0.525 0.126 156);
+
+  --chart-1: oklch(0.525 0.126 156);
+  --chart-2: oklch(0.522 0.176 27);
+  --chart-3: oklch(0.605 0.126 72);
+  --chart-4: oklch(0.455 0.168 285);
+  --chart-5: oklch(0.525 0.011 264);
+
+  --radius: 0.375rem;
+
+  --sidebar: var(--surface);
+  --sidebar-foreground: var(--foreground);
+  --sidebar-primary: var(--pass);
+  --sidebar-primary-foreground: oklch(0.985 0.002 106);
+  --sidebar-accent: var(--accent);
+  --sidebar-accent-foreground: var(--accent-foreground);
+  --sidebar-border: var(--rule);
+  --sidebar-ring: var(--ring);
 }
 
 .dark {
-  --background: oklch(0.145 0 0);
-  --foreground: oklch(0.985 0 0);
-  --card: oklch(0.205 0 0);
-  --card-foreground: oklch(0.985 0 0);
-  --popover: oklch(0.205 0 0);
-  --popover-foreground: oklch(0.985 0 0);
-  --primary: oklch(0.87 0.00 0);
-  --primary-foreground: oklch(0.205 0 0);
-  --secondary: oklch(0.269 0 0);
-  --secondary-foreground: oklch(0.985 0 0);
-  --muted: oklch(0.269 0 0);
-  --muted-foreground: oklch(0.708 0 0);
-  --accent: oklch(0.371 0 0);
-  --accent-foreground: oklch(0.985 0 0);
-  --destructive: oklch(0.704 0.191 22.216);
-  --border: oklch(1 0 0 / 10%);
-  --input: oklch(1 0 0 / 15%);
-  --ring: oklch(0.556 0 0);
-  --chart-1: oklch(0.809 0.105 251.813);
-  --chart-2: oklch(0.623 0.214 259.815);
-  --chart-3: oklch(0.546 0.245 262.881);
-  --chart-4: oklch(0.488 0.243 264.376);
-  --chart-5: oklch(0.424 0.199 265.638);
-  --sidebar: oklch(0.205 0 0);
-  --sidebar-foreground: oklch(0.985 0 0);
-  --sidebar-primary: oklch(0.488 0.243 264.376);
-  --sidebar-primary-foreground: oklch(0.985 0 0);
-  --sidebar-accent: oklch(0.269 0 0);
-  --sidebar-accent-foreground: oklch(0.985 0 0);
-  --sidebar-border: oklch(1 0 0 / 10%);
-  --sidebar-ring: oklch(0.556 0 0);
+  /* Ink: a cool near-black with enough lift that hairlines stay visible. */
+  --paper: oklch(0.178 0.006 264);
+  --surface: oklch(0.213 0.007 264);
+  --surface-raised: oklch(0.245 0.008 264);
+  --rule: oklch(0.305 0.009 264);
+  --rule-strong: oklch(0.395 0.011 264);
+
+  --background: var(--paper);
+  --foreground: oklch(0.928 0.004 106);
+  --card: var(--surface);
+  --card-foreground: var(--foreground);
+  --popover: var(--surface-raised);
+  --popover-foreground: var(--foreground);
+
+  --primary: oklch(0.928 0.004 106);
+  --primary-foreground: oklch(0.196 0.007 264);
+  --secondary: oklch(0.268 0.008 264);
+  --secondary-foreground: var(--foreground);
+  --muted: oklch(0.262 0.008 264);
+  --muted-foreground: oklch(0.678 0.012 264);
+  --accent: oklch(0.298 0.009 264);
+  --accent-foreground: var(--foreground);
+
+  --pass: oklch(0.742 0.152 157);
+  --pass-soft: oklch(0.278 0.048 157);
+  --pass-ink: oklch(0.822 0.142 157);
+  --fail: oklch(0.688 0.168 25);
+  --fail-soft: oklch(0.292 0.062 25);
+  --fail-ink: oklch(0.782 0.142 25);
+  --pending: oklch(0.788 0.135 78);
+  --pending-soft: oklch(0.298 0.052 78);
+  --pending-ink: oklch(0.855 0.118 82);
+  --keyword: oklch(0.738 0.128 288);
+  --keyword-soft: oklch(0.292 0.058 288);
+
+  --destructive: var(--fail);
+  --border: var(--rule);
+  --input: oklch(0.335 0.010 264);
+  --ring: oklch(0.742 0.152 157);
+
+  --chart-1: oklch(0.742 0.152 157);
+  --chart-2: oklch(0.688 0.168 25);
+  --chart-3: oklch(0.788 0.135 78);
+  --chart-4: oklch(0.738 0.128 288);
+  --chart-5: oklch(0.678 0.012 264);
+
+  --sidebar: var(--surface);
+  --sidebar-foreground: var(--foreground);
+  --sidebar-primary: var(--pass);
+  --sidebar-primary-foreground: oklch(0.196 0.007 264);
+  --sidebar-accent: var(--accent);
+  --sidebar-accent-foreground: var(--accent-foreground);
+  --sidebar-border: var(--rule);
+  --sidebar-ring: var(--ring);
 }
 
 @layer base {
   * {
-    @apply border-border outline-ring/50;
+    @apply border-border;
   }
-  body {
-    @apply bg-background text-foreground;
-    font-size: 1.0625rem;
-    line-height: 1.6;
-  }
+
   html {
     @apply font-sans;
+    -webkit-text-size-adjust: 100%;
+  }
+
+  body {
+    @apply bg-background text-foreground antialiased;
+    font-size: 0.9375rem;
+    line-height: 1.6;
+    font-feature-settings: "cv05" 1, "ss01" 1;
+  }
+
+  /* Headings are set in the mono face: in this product the machine-generated
+     artifact is the subject, so the type that names things matches the type
+     that shows them. */
+  h1,
+  h2,
+  h3,
+  h4 {
+    @apply font-mono font-semibold tracking-tight;
+    text-wrap: balance;
   }
 
   h1 {
-    @apply text-[clamp(2.6rem,5vw,4.25rem)] leading-tight;
+    font-size: clamp(1.875rem, 3.4vw, 3.125rem);
+    line-height: 1.08;
+    letter-spacing: -0.035em;
   }
 
   h2 {
-    @apply text-[clamp(1.35rem,2vw,1.75rem)] leading-tight;
+    font-size: clamp(1.25rem, 1.9vw, 1.625rem);
+    line-height: 1.18;
+    letter-spacing: -0.025em;
   }
 
   h3 {
-    @apply text-[clamp(1.05rem,1.4vw,1.2rem)] leading-snug;
+    font-size: clamp(1rem, 1.25vw, 1.125rem);
+    line-height: 1.3;
+    letter-spacing: -0.015em;
+  }
+
+  h4 {
+    @apply text-sm;
+    letter-spacing: -0.01em;
+  }
+
+  p {
+    text-wrap: pretty;
+  }
+
+  :focus-visible {
+    @apply outline-ring;
+    outline-width: 2px;
+    outline-style: solid;
+    outline-offset: 2px;
+  }
+
+  ::selection {
+    background: var(--pass-soft);
+    color: var(--pass-ink);
+  }
+}
+
+@layer components {
+  /* --- One shell, one gutter ----------------------------------------------
+     Every page and the nav share this container, so the wordmark, the nav
+     links and the page's first column all sit on the same left edge at every
+     breakpoint.
+
+     Full-bleed by design: the app is a workbench, not an article. A centred
+     max-width cap left a dead margin on either side of wide monitors while the
+     editor and the results table are exactly the surfaces that want the room.
+     The gutter is the only thing held constant, and it steps up with the
+     viewport so the content never runs into the screen edge.
+
+     Prose still gets a measure — that is set on the PARAGRAPH (see PageHeader),
+     never on this shell. */
+  .app-shell {
+    @apply w-full px-6 sm:px-10 lg:px-20 xl:px-32 2xl:px-40;
+  }
+
+  /* --- The signature: a keyword gutter ------------------------------------
+     A .feature file reads as a fixed-width keyword column against a rule.
+     Panels, steps and scenario rows all inherit that same left edge, which
+     is what ties the app together visually. */
+
+  .eyebrow {
+    @apply font-mono text-[0.6875rem] font-semibold uppercase;
+    letter-spacing: 0.16em;
+  }
+
+  .gutter-rule {
+    @apply relative pl-4;
+  }
+
+  .gutter-rule::before {
+    content: "";
+    @apply absolute inset-y-0 left-0 w-px bg-rule;
+  }
+
+  .gutter-rule[data-signal="pass"]::before {
+    @apply bg-pass;
+  }
+
+  .gutter-rule[data-signal="fail"]::before {
+    @apply bg-fail;
+  }
+
+  .gutter-rule[data-signal="pending"]::before {
+    @apply bg-pending;
+  }
+
+  /* Gherkin keyword — the one place the violet accent is allowed. */
+  .kw {
+    @apply font-mono font-semibold text-keyword;
+  }
+
+  /* Panels are defined by their rules, not by shadow. */
+  .panel {
+    @apply rounded-lg border border-rule bg-card;
+  }
+
+  .panel-header {
+    @apply flex items-center justify-between gap-3 border-b border-rule px-4 py-3;
+  }
+
+  /* Caret that blinks at the end of the hero's Gherkin block. */
+  .caret::after {
+    content: "";
+    @apply ml-0.5 inline-block h-[1em] w-[0.5ch] translate-y-[0.12em] bg-pass;
+    animation: caret-blink 1.15s steps(1) infinite;
+  }
+
+  .scrollbar-thin {
+    scrollbar-width: thin;
+    scrollbar-color: var(--rule-strong) transparent;
+  }
+
+  .scrollbar-thin::-webkit-scrollbar {
+    @apply h-2 w-2;
+  }
+
+  .scrollbar-thin::-webkit-scrollbar-track {
+    background: transparent;
+  }
+
+  .scrollbar-thin::-webkit-scrollbar-thumb {
+    @apply rounded-full;
+    background: var(--rule-strong);
+  }
+}
+
+@keyframes caret-blink {
+  0%,
+  49% {
+    opacity: 1;
+  }
+  50%,
+  100% {
+    opacity: 0;
+  }
+}
+
+@keyframes toast-in {
+  from {
+    opacity: 0;
+    transform: translateY(8px) scale(0.98);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
+@keyframes toast-out {
+  from {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+  to {
+    opacity: 0;
+    transform: translateY(4px) scale(0.98);
+  }
+}
+
+@keyframes overlay-in {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+@keyframes sheet-in {
+  from {
+    transform: translateX(100%);
+  }
+  to {
+    transform: translateX(0);
+  }
+}
+
+@keyframes sheet-out {
+  from {
+    transform: translateX(0);
+  }
+  to {
+    transform: translateX(100%);
+  }
+}
+
+@keyframes row-in {
+  from {
+    opacity: 0;
+    transform: translateY(4px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@keyframes shimmer {
+  100% {
+    transform: translateX(100%);
+  }
+}
+
+@keyframes indeterminate {
+  0% {
+    transform: translateX(-100%);
+  }
+  100% {
+    transform: translateX(300%);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.001ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.001ms !important;
+    scroll-behavior: auto !important;
+  }
+
+  .caret::after {
+    opacity: 1;
   }
 }

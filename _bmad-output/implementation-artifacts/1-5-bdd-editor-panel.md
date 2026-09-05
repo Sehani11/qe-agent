@@ -2,6 +2,8 @@
 
 Status: done
 
+> **Amended 2026-08-22** ([maintenance record](maintenance-2026-08-22-ui-redesign-feature-file.md)): The interface typeface is now JetBrains Mono + Instrument Sans, not Poppins, and the base size dropped 17px → 15px. `TerminalProgressLog` is no longer the "friendly status card rather than a terminal log" this story specified — it renders the three pipeline stages with per-stage glyphs **plus the live SSE log tail** it had been ignoring. `BDDEditorPanel` keeps its anatomy and every testid, but is restyled on the new tokens, gains toasts for save/upload/export outcomes, and switches Monaco between `gherkin-light` and `gherkin-dark`.
+
 <!-- Note: Validation is optional. Run validate-create-story for quality check before dev-story. -->
 
 ## Story

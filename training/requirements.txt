@@ -1,0 +1,28 @@
+# Local tooling for training/ ONLY.
+#
+# ⚠️ These must NEVER be added to backend/pyproject.toml. The backend Dockerfile
+# ends with `COPY . .`, so anything in the backend's dependency set ships in the
+# production image — an inference-only service does not need CUDA wheels.
+#
+# The Kaggle/Colab notebook installs its own GPU stack in its first cell; you do
+# NOT need this file to run the training. It covers local work only: reading the
+# config and inspecting the emitted dataset.
+#
+# Install into a throwaway venv, never the backend one:
+#   python -m venv .venv-training && .venv-training/bin/pip install -r training/requirements.txt
+
+PyYAML>=6.0
+
+# Drives the run on Kaggle's free GPU: uploads the dataset, pushes the kernel,
+# polls it, pulls the log back (training/kaggle_run.py).
+kaggle>=1.6.0
+
+# The GPU stack, for reference — installed by the notebook, not from here.
+# Pinning it locally would tempt someone to `uv add` it into the backend.
+#   unsloth
+#   torch
+#   transformers
+#   trl
+#   peft
+#   datasets
+#   bitsandbytes

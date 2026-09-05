@@ -1,0 +1,900 @@
+# Product-domain training pairs — Resume Generator
+#
+# WHY THIS FILE EXISTS
+#
+# RUN_LOG.md has said the same thing since Run 1: the model learned the SHAPE of
+# the task convincingly and the REASONING barely at all, because 84% of the
+# corpus is Gherkin from testing frameworks (behat, aruba, cucumber-*) where the
+# scenarios describe running CLI commands rather than product behaviour. Run 2
+# proved adding ~9% more of the same data changes nothing, and Run 3 proved a
+# 4.9x smaller model does not lose. The constraint is the DOMAIN of the data.
+#
+# These pairs are that missing domain: a real product (E:\Projects\Python\
+# resume-generator), described by its own requirements document, written as the
+# Jira tickets the application actually receives.
+#
+# SOURCE: resume-generator/docs/requirements-analysis.md. Every acceptance
+# criterion below is traceable to a decision in that document — nothing here is
+# invented product behaviour. Section references are on each ticket.
+#
+#
+# THE TWO RULES THIS FILE IS WRITTEN TO
+#
+# 1. EVERY `then` STATES AN OBSERVABLE OUTCOME.
+#    Not "the system validates the password" — that restates the criterion and
+#    cannot be checked. "the account is not created and the message names the
+#    unmet rule" can be. Weak `then` steps are the exact defect RUN_LOG records
+#    ("fluent form, thin substance"), and training on them teaches it.
+#
+# 2. EVERY TICKET CARRIES AT LEAST ONE FAILURE OR EDGE CASE.
+#    A corpus of happy paths produces a model that writes only happy paths. The
+#    expired token, the unreadable upload, the missing API key and the
+#    conflicting merge are the scenarios worth learning.
+#
+#
+# TRACEABILITY — READ BEFORE CHANGING THE FORMAT
+#
+# `source_ac_clause` is rendered as "AC3: <the criterion text>" — the numbered
+# label AND the sentence it points at. Both halves are load-bearing:
+#
+#   * the LABEL is what app/services/evaluation_metrics.py matches on. Citing
+#     only the sentence (as the original sample did) makes ac_clauses() return
+#     an empty list, coverage() return None for every item, and the 1.000
+#     coverage that is currently the best result on record print as "n/a".
+#   * the SENTENCE is what makes the traceability readable in the rendered
+#     Gherkin comment, which was the point of the sample's format.
+#
+# Keeping both costs nothing and breaks nothing. Dropping the label silently
+# disables the metric.
+
+tickets:
+  # --- Core generation (§1 U1, §4) -----------------------------------------
+  - id: RG-001
+    source: "requirements-analysis.md §1 (U1), §4"
+    feature: Resume Form Entry and PDF Export
+    title: Structured form entry with PDF export
+    as_a: job seeker
+    i_want: to enter my details in a structured form and export a polished PDF
+    so_that: I can produce a resume without using a word processor
+    description: >-
+      This story covers the core generation path with no AI involved. The user
+      fills in contact details, work experience, education and skills, and the
+      app renders the data through the selected HTML template into a PDF. The
+      renderer must produce real selectable text rather than an image, dates
+      must be normalised to a consistent format, and required contact fields
+      must be present before export is offered.
+    acceptance_criteria:
+      - The user can enter contact details, work experience, education and skills in a structured form.
+      - Exporting produces a PDF whose text is selectable rather than rendered as an image.
+      - Dates are normalised to a consistent MMM YYYY format regardless of how the user typed them.
+      - Export is refused when required contact fields are missing.
+    scenarios:
+      - clause: 1
+        scenario: Exporting a resume entered through the form
+        given: I have entered my contact details, one work entry and one education entry
+        when: I export the resume as a PDF
+        then: a PDF is produced containing every section I filled in, and no empty section headings appear
+      - clause: 2
+        scenario: Exported PDF contains selectable text
+        given: I have completed the form and chosen a template
+        when: I export the resume and open the PDF in a reader
+        then: the body text can be selected and copied, and searching for my job title finds it
+      - clause: 3
+        scenario: Inconsistent date entry is normalised on export
+        given: I entered one role's dates as "03/2021" and another's as "March 2021"
+        when: I export the resume as a PDF
+        then: both roles display their dates as "Mar 2021" in the exported document
+      - clause: 4
+        scenario: Export blocked when contact details are incomplete
+        given: I have filled in my work experience but left the email field empty
+        when: I attempt to export the resume
+        then: no PDF is produced and the form marks the email field as required
+
+  # --- Resume upload and parsing (§6) --------------------------------------
+  - id: RG-002
+    source: "requirements-analysis.md §6"
+    feature: Old Resume Upload and Parsing
+    title: Upload an existing resume and extract the data automatically
+    as_a: job seeker with an old resume
+    i_want: to upload my existing PDF or DOCX and have my details extracted
+    so_that: I do not have to retype years of work history
+    description: >-
+      The user uploads a PDF, DOCX or TXT resume. DOCX and TXT are converted to
+      text locally, while PDFs are passed to the configured LLM provider, which
+      reads the layout visually and returns data validated against the
+      ResumeData schema. Extraction must never invent facts that are absent
+      from the document, and the extracted data is always shown on an editable
+      review screen before anything is rendered. Files that cannot be read must
+      fail with a message that tells the user what to do next.
+    acceptance_criteria:
+      - The user can upload a resume in PDF, DOCX or TXT format.
+      - Extracted data is validated against the ResumeData schema before it is accepted.
+      - The parser extracts only what the document contains and never invents missing facts.
+      - Extracted data is always shown on an editable review screen before rendering.
+      - An unreadable or unsupported file is rejected with an explanatory message.
+    scenarios:
+      - clause: 1
+        scenario: Uploading a DOCX resume
+        given: I have a resume saved as a DOCX file
+        when: I upload the file for import
+        then: my work history and education appear on the review screen with the employer names from the document
+      - clause: 2
+        scenario: Extraction that does not match the schema is rejected
+        given: the provider returns a work entry whose start date is later than its end date
+        when: the extracted data is validated
+        then: the import stops with a validation error naming the offending entry, and no profile is created
+      - clause: 3
+        scenario: Absent fields are left empty rather than filled in
+        given: I upload a resume that contains no professional summary
+        when: the extraction completes
+        then: the summary field on the review screen is empty and contains no generated text
+      - clause: 4
+        scenario: Review screen precedes rendering
+        given: my uploaded resume has been parsed successfully
+        when: the import finishes
+        then: the editable review screen is shown and no PDF has been produced yet
+      - clause: 5
+        scenario: Uploading an unsupported file type
+        given: I have my resume saved as an image file
+        when: I attempt to upload it
+        then: the upload is refused and the message lists PDF, DOCX and TXT as the accepted formats
+
+  # --- LinkedIn export import (§5) -----------------------------------------
+  - id: RG-003
+    source: "requirements-analysis.md §5"
+    feature: LinkedIn Data Export Import
+    title: Import a LinkedIn data export archive
+    as_a: LinkedIn user
+    i_want: to upload my official LinkedIn data export and pre-fill my resume
+    so_that: my job history is imported without retyping it
+    description: >-
+      LinkedIn provides no readable profile API, so import happens through the
+      official data export archive the member downloads themselves. The archive
+      contains structured CSV files covering positions, education, skills and
+      certifications. The app parses those CSVs directly rather than through an
+      LLM, since the export is already machine readable. Archives that are
+      missing the expected files must be reported clearly, and the app must
+      guide the user through requesting the export in the first place.
+    acceptance_criteria:
+      - The user can upload the LinkedIn data export ZIP archive.
+      - Positions, education, skills and certifications are read from the CSV files in the archive.
+      - An archive missing the expected CSV files is rejected with a message naming what was missing.
+      - The app shows instructions for requesting the export before the user uploads anything.
+    scenarios:
+      - clause: 1
+        scenario: Importing a complete LinkedIn export
+        given: I have downloaded my LinkedIn data export archive
+        when: I upload the archive
+        then: my positions and education appear on the review screen with the dates recorded by LinkedIn
+      - clause: 2
+        scenario: Skills and certifications are imported alongside positions
+        given: my export archive contains Skills.csv and Certifications.csv
+        when: the archive is parsed
+        then: each skill and certification from those files appears in the imported profile
+      - clause: 3
+        scenario: Archive missing the positions file
+        given: I upload an export archive that contains no Positions.csv
+        when: the archive is parsed
+        then: the import is refused and the message names Positions.csv as the missing file
+      - clause: 4
+        scenario: Export instructions shown before upload
+        given: I have not yet requested my data from LinkedIn
+        when: I open the LinkedIn import page
+        then: the steps for requesting the export are shown together with the expected waiting time
+
+  # --- Hybrid merge (§6.1) -------------------------------------------------
+  - id: RG-004
+    source: "requirements-analysis.md §6.1"
+    feature: Hybrid Import Merge
+    title: Merge an uploaded resume with a LinkedIn export
+    as_a: job seeker with both a resume and a LinkedIn profile
+    i_want: both sources merged into one profile
+    so_that: I get the cleanest dates and the richest wording without choosing between them
+    description: >-
+      Every import route produces the same ResumeData schema, so two sources can
+      be reconciled rather than one discarded. Work entries are matched across
+      sources on company name and overlapping dates, with fuzzy matching on the
+      company so that abbreviations still align. Once matched, structured facts
+      such as dates and titles are taken from LinkedIn because it is cleaner,
+      while prose such as bullet points is taken from the resume because it is
+      richer. Entries that appear in only one source are always kept.
+    acceptance_criteria:
+      - The user can supply an uploaded resume and a LinkedIn export together.
+      - Work entries are matched across sources on company name and overlapping date range.
+      - Structured facts such as dates and job titles are taken from the LinkedIn source.
+      - Prose such as bullet points and summaries is taken from the resume source.
+      - Entries present in only one source are kept rather than dropped.
+    scenarios:
+      - clause: 1
+        scenario: Supplying both sources in one import
+        given: I have an old resume file and a LinkedIn export archive
+        when: I supply both in the same import
+        then: one merged profile is produced and I am not asked to choose between the sources
+      - clause: 2
+        scenario: The same job in both sources is merged into one entry
+        given: my resume lists "Acme Corp." and my LinkedIn export lists "Acme Corporation" with overlapping dates
+        when: the two sources are merged
+        then: the profile contains one work entry for that job rather than two
+      - clause: 3
+        scenario: Dates are taken from LinkedIn when the sources disagree in precision
+        given: my resume gives a job as "2021" and LinkedIn gives it as March 2021 to June 2023
+        when: the two sources are merged
+        then: the merged entry carries the March 2021 to June 2023 dates from LinkedIn
+      - clause: 4
+        scenario: Bullet wording is taken from the resume
+        given: my LinkedIn entry has a one-line description and my resume has four detailed bullets for the same job
+        when: the two sources are merged
+        then: the merged entry carries the four bullets from the resume
+      - clause: 5
+        scenario: A job present in only one source survives the merge
+        given: my resume includes a contract role that is absent from my LinkedIn export
+        when: the two sources are merged
+        then: the contract role appears in the merged profile
+
+  - id: RG-005
+    source: "requirements-analysis.md §6.1 step 4"
+    feature: Merge Conflict Review
+    title: Surface merge conflicts for the user to resolve
+    as_a: job seeker importing from two sources
+    i_want: to be shown where my sources disagree
+    so_that: I decide which value is correct instead of the app guessing
+    description: >-
+      When two sources genuinely disagree on the same field of the same matched
+      entry, the app must not silently pick a winner. The disagreement is
+      flagged on the review screen with both candidate values shown and their
+      origin labelled, and the user chooses. Nothing can be rendered while an
+      unresolved conflict remains. Fields where only one source has a value are
+      not conflicts and must not be flagged as such.
+    acceptance_criteria:
+      - Fields where the two sources disagree are flagged on the review screen.
+      - Both candidate values are shown with the source each came from.
+      - The user can choose which value to keep, and the choice is applied to the profile.
+      - Rendering is blocked while an unresolved conflict remains.
+      - A field supplied by only one source is not reported as a conflict.
+    scenarios:
+      - clause: 1
+        scenario: Disagreeing end dates are flagged
+        given: my resume ends a job in June 2023 and my LinkedIn export ends the same job in August 2023
+        when: I reach the review screen
+        then: that job's end date is marked as conflicting
+      - clause: 2
+        scenario: Both candidate values are attributed to their source
+        given: a conflicting end date has been flagged
+        when: I open the conflict
+        then: June 2023 is shown as coming from the resume and August 2023 as coming from LinkedIn
+      - clause: 3
+        scenario: Resolving a conflict applies the chosen value
+        given: I am viewing a conflicting end date
+        when: I select the LinkedIn value and confirm
+        then: the profile records August 2023 and the field is no longer marked as conflicting
+      - clause: 4
+        scenario: Export blocked while a conflict is unresolved
+        given: one flagged conflict has not been resolved
+        when: I attempt to export the resume
+        then: no PDF is produced and the unresolved conflict is highlighted
+      - clause: 5
+        scenario: A field only one source provides is not a conflict
+        given: my resume has a professional summary and my LinkedIn export has none
+        when: I reach the review screen
+        then: the summary is filled in from the resume and is not marked as conflicting
+
+  # --- Templates (§4) ------------------------------------------------------
+  - id: RG-006
+    source: "requirements-analysis.md §4"
+    feature: Template Selection
+    title: Choose a resume template with ATS safety shown
+    as_a: job seeker
+    i_want: to pick a template and see whether it is safe for applicant tracking systems
+    so_that: I can make an informed choice rather than being blocked or misled
+    description: >-
+      Templates are registry based: each template folder ships a manifest
+      declaring its name, whether it is ATS safe, the page sizes it supports and
+      which properties can be customised. The picker shows a preview and an ATS
+      badge for every template. Selecting a template that is not ATS safe shows
+      a warning but never prevents the choice, because designed formats are a
+      legitimate option for direct applications. The same profile data must
+      render into any template without re-entry.
+    acceptance_criteria:
+      - Each template folder is discovered through its manifest file.
+      - Every template in the picker shows a preview and an ATS-safe badge.
+      - Selecting a template that is not ATS safe shows a warning without blocking the choice.
+      - The same profile data renders into any selected template without re-entering it.
+    scenarios:
+      - clause: 1
+        scenario: A newly added template appears in the picker
+        given: a template folder containing a valid manifest is added to the templates directory
+        when: I open the template picker
+        then: that template is listed with the name declared in its manifest
+      - clause: 2
+        scenario: ATS safety is visible on every card
+        given: I am viewing the template picker
+        when: the templates load
+        then: each card shows a preview image and states whether the template is ATS safe
+      - clause: 3
+        scenario: Choosing a non-ATS template warns but proceeds
+        given: I am viewing the two-column template, which is not ATS safe
+        when: I select it
+        then: the template is applied and a note explains it may not parse cleanly in applicant tracking systems
+      - clause: 4
+        scenario: Switching template keeps the entered data
+        given: I have completed my profile using the ATS Classic template
+        when: I switch to the Modern template
+        then: every section of my profile is rendered in the new template with no data lost
+
+  # --- Theming (§8) --------------------------------------------------------
+  - id: RG-007
+    source: "requirements-analysis.md §8"
+    feature: Theme Customisation
+    title: Customise fonts, colours and spacing
+    as_a: job seeker
+    i_want: to adjust the font, accent colour, page size and spacing
+    so_that: the resume matches how I want to present myself
+    description: >-
+      Theme settings are design tokens consumed by templates as CSS custom
+      properties, so every template becomes customisable without template
+      specific code. Fonts come from a bundled whitelist, and templates marked
+      ATS safe restrict that list further to fonts that applicant tracking
+      systems parse reliably. Changes appear in the live preview before export,
+      and the preview must match the exported PDF.
+    acceptance_criteria:
+      - The user can set font family, accent colour, page size, margins and section spacing.
+      - Fonts are limited to the bundled whitelist.
+      - Templates marked ATS safe offer only the fonts known to parse reliably.
+      - Theme changes appear in the live preview before export.
+    scenarios:
+      - clause: 1
+        scenario: Changing the accent colour
+        given: I am editing the theme for my resume
+        when: I set the accent colour to a dark blue
+        then: the section headings in the preview are rendered in that colour
+      - clause: 2
+        scenario: Only bundled fonts are offered
+        given: I am choosing a font for my resume
+        when: I open the font selector
+        then: every font listed is one of the bundled fonts and no system font appears
+      - clause: 3
+        scenario: ATS template restricts the font list
+        given: I have selected the ATS Classic template
+        when: I open the font selector
+        then: only the ATS-safe fonts are offered and the decorative fonts are absent
+      - clause: 4
+        scenario: Preview updates before export
+        given: I have my resume open in the editor
+        when: I change the page size from A4 to US Letter
+        then: the preview re-renders at the new page size without my exporting anything
+      - clause: 1
+        scenario: Margins outside the printable range are refused
+        given: I am editing the theme margins
+        when: I set the left margin to a value larger than the page width
+        then: the value is rejected and the previous margin remains in effect
+
+  # --- ATS rules (§7) ------------------------------------------------------
+  - id: RG-008
+    source: "requirements-analysis.md §7"
+    feature: ATS-Safe Output
+    title: Enforce ATS parsing rules in default templates
+    as_a: job seeker applying through job portals
+    i_want: my default resume to follow applicant tracking system rules
+    so_that: my application is not silently dropped by an automated screener
+    description: >-
+      Templates marked ATS safe must follow a fixed set of layout rules: a
+      single column with top-to-bottom reading order, standard section headings,
+      real selectable text, no tables or text boxes carrying essential
+      information, and no critical content placed in headers or footers. These
+      rules apply to the rendered output, not merely to the template source, so
+      they must hold after theming has been applied.
+    acceptance_criteria:
+      - ATS-safe templates render in a single column with top-to-bottom reading order.
+      - Standard section headings such as Work Experience, Education and Skills are used.
+      - Essential information is never placed in tables, text boxes, headers or footers.
+      - The rules continue to hold after the user has customised the theme.
+    scenarios:
+      - clause: 1
+        scenario: ATS template renders as a single column
+        given: I have selected an ATS-safe template
+        when: I export the resume and extract its text in reading order
+        then: the sections appear in the same order as on the page with no interleaving from a sidebar
+      - clause: 2
+        scenario: Standard headings are used
+        given: I have selected an ATS-safe template
+        when: I export the resume
+        then: the exported document uses the headings Work Experience, Education and Skills
+      - clause: 3
+        scenario: Contact details are not confined to the page header
+        given: I have selected an ATS-safe template and entered my phone number
+        when: the text is extracted from the exported PDF
+        then: my phone number is present in the extracted body text
+      - clause: 4
+        scenario: Theming does not break the ATS rules
+        given: I have selected an ATS-safe template and changed the font and accent colour
+        when: I export the resume
+        then: the output is still a single column with selectable text and standard headings
+
+  # --- Provider layer (§3) -------------------------------------------------
+  - id: RG-009
+    source: "requirements-analysis.md §3"
+    feature: LLM Provider Selection
+    title: Select the AI provider through configuration
+    as_a: operator deploying the app
+    i_want: to choose the AI provider with one environment variable
+    so_that: switching providers needs no code change
+    description: >-
+      Every AI feature sits behind a provider-agnostic interface, and a factory
+      instantiates the configured provider at startup. The rest of the
+      application never imports a vendor SDK directly, so all providers return
+      the same validated ResumeData and the renderer stays provider agnostic.
+      An unrecognised provider name must fail at startup rather than at the
+      first AI request, so misconfiguration is found before a user hits it.
+    acceptance_criteria:
+      - The active provider is selected by the LLM_PROVIDER environment variable.
+      - Every provider returns data validated against the same ResumeData schema.
+      - An unrecognised provider name fails at startup with a message listing the valid names.
+      - No component outside the provider layer imports a vendor SDK.
+    scenarios:
+      - clause: 1
+        scenario: Switching provider by configuration alone
+        given: the application is configured with one provider
+        when: I change LLM_PROVIDER to another supported provider and restart
+        then: parsing requests are served by the newly configured provider with no code change
+      - clause: 2
+        scenario: Providers agree on the output shape
+        given: the same resume file is parsed under two different configured providers
+        when: each result is validated
+        then: both results validate against the ResumeData schema and populate the same fields
+      - clause: 3
+        scenario: Unknown provider name stops startup
+        given: LLM_PROVIDER is set to a name that does not exist
+        when: the application starts
+        then: startup fails and the error lists the supported provider names
+      - clause: 4
+        scenario: Vendor SDKs stay inside the provider layer
+        given: the application source outside the provider package
+        when: its imports are inspected
+        then: no vendor SDK is imported outside the provider package
+
+  - id: RG-010
+    source: "requirements-analysis.md §3 (no_llm)"
+    feature: Offline Mode Without an AI Provider
+    title: Run fully offline with no API key
+    as_a: privacy-conscious user
+    i_want: the app to work with no AI provider configured
+    so_that: my resume never leaves my machine
+    description: >-
+      The no_llm provider keeps the application fully usable with no API key and
+      no vendor SDK installed. Parsing falls back to local text extraction with
+      heuristic section detection, which is less accurate, so the review screen
+      carries the burden and the interface must set that expectation honestly.
+      Features that genuinely require a language model, such as bullet
+      rewriting, are disabled rather than silently returning the input
+      unchanged.
+    acceptance_criteria:
+      - The application starts and generates resumes with no API key configured.
+      - Uploaded resumes are parsed locally when no AI provider is configured.
+      - The interface states that local parsing is less accurate than provider parsing.
+      - Features requiring a language model are disabled rather than silently doing nothing.
+    scenarios:
+      - clause: 1
+        scenario: Starting with no API key
+        given: no provider API key is present in the environment and the provider is no_llm
+        when: the application starts
+        then: it starts without error and the form and export features are available
+      - clause: 2
+        scenario: Local parsing of an uploaded resume
+        given: the application is running in no_llm mode
+        when: I upload a text-based resume
+        then: the detected sections are populated on the review screen without any outbound network call
+      - clause: 3
+        scenario: Reduced accuracy is stated up front
+        given: the application is running in no_llm mode
+        when: I open the upload page
+        then: a note explains that local parsing is less accurate and that I should check the review screen
+      - clause: 4
+        scenario: Rewriting is unavailable rather than silently inert
+        given: the application is running in no_llm mode
+        when: I look for the bullet rewriting action
+        then: it is shown as unavailable and explains that it needs an AI provider
+
+  - id: RG-011
+    source: "requirements-analysis.md §3 design rules"
+    feature: Provider Credential Handling
+    title: Fail clearly when the selected provider has no usable key
+    as_a: operator deploying the app
+    i_want: a clear error when the configured provider cannot authenticate
+    so_that: I fix the configuration instead of debugging a runtime failure
+    description: >-
+      Only the active provider's key is required, so the presence of unrelated
+      keys must not affect startup. When the selected provider has a missing or
+      rejected key, the application must fail at startup with a message that
+      names the variable it needs and suggests the offline provider as a
+      fallback. The key itself must never appear in logs or error output.
+    acceptance_criteria:
+      - Only the selected provider's API key is required for startup.
+      - A missing key for the selected provider fails at startup and names the variable required.
+      - The error suggests the offline provider as a fallback.
+      - API key values are never written to logs or error messages.
+    scenarios:
+      - clause: 1
+        scenario: Unrelated provider keys are not required
+        given: the selected provider's key is present and the other providers' keys are absent
+        when: the application starts
+        then: it starts normally and no error mentions the absent keys
+      - clause: 2
+        scenario: Missing key for the selected provider
+        given: the selected provider's API key is not set
+        when: the application starts
+        then: startup fails and the message names the environment variable that must be set
+      - clause: 3
+        scenario: The fallback is offered in the error
+        given: startup has failed because the selected provider has no key
+        when: I read the error message
+        then: it tells me the offline provider can be used instead
+      - clause: 4
+        scenario: A rejected key does not leak into the log
+        given: the configured API key is present but rejected by the provider
+        when: the failure is logged
+        then: the log records the authentication failure without reproducing the key value
+
+  # --- AI writing features (§7 differentiator) ------------------------------
+  - id: RG-012
+    source: "requirements-analysis.md §3, §7"
+    feature: Bullet Point Rewriting
+    title: Improve the wording of bullet points without inventing facts
+    as_a: job seeker
+    i_want: my bullet points rewritten more strongly
+    so_that: my achievements read well without my having to word them
+    description: >-
+      Rewriting improves the language of an existing bullet only. The hard rule
+      across every writing prompt is to improve, never invent: no new employer,
+      technology, metric or responsibility may appear that was not in the
+      original text. The user is shown the original alongside the suggestion and
+      accepts or rejects each one, and nothing is applied automatically.
+    acceptance_criteria:
+      - The user can request a rewrite of a selected bullet point.
+      - The rewrite introduces no employer, technology or metric absent from the original.
+      - The original and the suggestion are shown side by side.
+      - A suggestion is applied only when the user accepts it.
+    scenarios:
+      - clause: 1
+        scenario: Rewriting a single bullet
+        given: I have a bullet reading "responsible for the payments service"
+        when: I request a rewrite of that bullet
+        then: a suggested rewrite of the same bullet is returned and the other bullets are unchanged
+      - clause: 2
+        scenario: No invented metric appears in the rewrite
+        given: my original bullet contains no numbers
+        when: the rewrite is returned
+        then: the suggestion contains no percentage or figure that was absent from my original
+      - clause: 3
+        scenario: Original shown next to the suggestion
+        given: a rewrite has been returned for one of my bullets
+        when: I review it
+        then: the original wording and the suggested wording are both visible
+      - clause: 4
+        scenario: Rejecting a suggestion leaves the resume untouched
+        given: I am reviewing a suggested rewrite
+        when: I reject it
+        then: my original bullet remains in the resume and the suggestion is discarded
+
+  - id: RG-013
+    source: "requirements-analysis.md §7 differentiator"
+    feature: Job Description Tailoring and ATS Score
+    title: Score a resume against a job description
+    as_a: job seeker applying to a specific role
+    i_want: to see how well my resume covers the job description
+    so_that: I know what to strengthen before applying
+    description: >-
+      The user pastes a job description. Required skills and keywords are
+      extracted from it by the language model, and the coverage score is then
+      computed by deterministic code so that the same resume and job description
+      always produce the same score. Missing keywords are listed so the gap is
+      actionable, and any suggested rewrites remain bound by the rule against
+      fabricating experience.
+    acceptance_criteria:
+      - The user can paste a job description and request a score.
+      - Keywords are extracted from the job description and the coverage score is computed deterministically.
+      - The same resume and job description always produce the same score.
+      - Keywords absent from the resume are listed as gaps.
+      - Suggested changes never claim experience the resume does not contain.
+    scenarios:
+      - clause: 1
+        scenario: Requesting a score for a pasted description
+        given: I have a completed resume open
+        when: I paste a job description and request a score
+        then: a score for that description is returned and my resume content is unchanged
+      - clause: 2
+        scenario: Scoring a resume against a pasted description
+        given: I have a completed resume and a pasted job description
+        when: I request the score
+        then: a coverage score is shown together with the keywords that were matched
+      - clause: 3
+        scenario: Scoring is repeatable
+        given: I have scored my resume against a job description
+        when: I request the score again for the same resume and description
+        then: the same score is returned
+      - clause: 4
+        scenario: Missing keywords are listed
+        given: the job description requires a skill my resume does not mention
+        when: the score is returned
+        then: that skill is listed among the gaps
+      - clause: 5
+        scenario: Suggestions do not fabricate experience
+        given: the job description requires a technology I have never used
+        when: I view the suggestions for closing the gap
+        then: no suggestion adds that technology to my work history as though I had used it
+
+  # --- Review screen (§6) --------------------------------------------------
+  - id: RG-014
+    source: "requirements-analysis.md §6, §6.1 step 5"
+    feature: Import Review Screen
+    title: Review and correct imported data before rendering
+    as_a: job seeker who imported data
+    i_want: to check and correct what was extracted
+    so_that: no parsing mistake reaches the resume I send out
+    description: >-
+      Extraction is never trusted directly. Whatever the source — a parsed
+      resume, a LinkedIn export or a merge of both — the extracted data lands on
+      an editable review screen first, and the same screen serves every import
+      route. Edits made there are what gets rendered. Fields the parser could
+      not populate are shown as empty and editable rather than hidden.
+    acceptance_criteria:
+      - Every import route presents the same editable review screen before rendering.
+      - Edits made on the review screen are applied to the rendered resume.
+      - Fields the parser could not populate are shown as empty and editable.
+      - The user can abandon an import without altering an existing saved profile.
+    scenarios:
+      - clause: 1
+        scenario: The review screen appears whichever route was used
+        given: I imported my data from a LinkedIn export
+        when: the import completes
+        then: the same editable review screen is shown as for an uploaded resume
+      - clause: 2
+        scenario: Corrections reach the exported document
+        given: the parser recorded my job title as "Sr. Eng" on the review screen
+        when: I correct it to "Senior Engineer" and export the resume
+        then: the exported PDF shows "Senior Engineer"
+      - clause: 3
+        scenario: Unpopulated fields remain editable
+        given: the parser could not find my professional summary
+        when: I open the review screen
+        then: the summary field is empty and I can type into it
+      - clause: 4
+        scenario: Abandoning an import leaves the saved profile intact
+        given: I have a saved profile and have started a new import
+        when: I abandon the import at the review screen
+        then: my saved profile is unchanged
+
+  # --- Persistence (§1 U7) -------------------------------------------------
+  - id: RG-015
+    source: "requirements-analysis.md §1 (U7), §9 storage"
+    feature: Profile Save and Reuse
+    title: Save a profile and regenerate resumes later
+    as_a: job seeker applying to several roles
+    i_want: to save my profile and come back to it
+    so_that: I can produce a tailored resume per application without starting over
+    description: >-
+      A profile is stored locally so that the user can reopen it, adjust the
+      theme or tailoring, and export again. Several resumes may be generated
+      from one profile, and exporting must never modify the stored profile.
+      Saving under an existing name must ask before overwriting, since a profile
+      represents work the user cannot easily reproduce.
+    acceptance_criteria:
+      - The user can save the current profile under a name.
+      - A saved profile can be reopened with all its data intact.
+      - Exporting a resume does not modify the stored profile.
+      - Saving under an existing name asks for confirmation before overwriting.
+    scenarios:
+      - clause: 2
+        scenario: Reopening a saved profile
+        given: I saved my profile and closed the application
+        when: I reopen the saved profile
+        then: my contact details, work history and education are present as I left them
+      - clause: 3
+        scenario: Exporting leaves the stored profile unchanged
+        given: I have opened a saved profile
+        when: I export it with a different template and reopen the profile
+        then: the stored profile still holds the template and data it had before the export
+      - clause: 4
+        scenario: Overwriting an existing profile is confirmed first
+        given: a profile named "default" already exists
+        when: I save the current profile under the name "default"
+        then: I am asked to confirm before the existing profile is replaced
+      - clause: 1
+        scenario: Generating two tailored resumes from one profile
+        given: I have one saved profile
+        when: I export it twice with different job descriptions applied
+        then: two documents are produced and the underlying profile is unchanged
+
+  # --- DOCX export (§4) ----------------------------------------------------
+  - id: RG-016
+    source: "requirements-analysis.md §4, §7"
+    feature: DOCX Export
+    title: Export the same resume as a DOCX file
+    as_a: job seeker applying through a portal that requires Word format
+    i_want: to export my resume as a DOCX
+    so_that: I can apply where PDF is not accepted
+    description: >-
+      Some recruiters and application portals require a Word document. DOCX is
+      generated from the same profile data as the PDF, so both formats carry
+      identical content and the user does not maintain two versions. The
+      exported document uses real paragraph styles rather than manual spacing,
+      so that applicant tracking systems can read its structure.
+    acceptance_criteria:
+      - The user can export the current resume as a DOCX file.
+      - The DOCX and PDF exports contain the same content from the same profile.
+      - The DOCX uses real heading styles rather than manually formatted text.
+    scenarios:
+      - clause: 1
+        scenario: Exporting to DOCX
+        given: I have a completed profile
+        when: I export the resume as a DOCX
+        then: a DOCX file is produced containing my work history and education
+      - clause: 2
+        scenario: Both formats carry the same content
+        given: I have exported the same profile as both a PDF and a DOCX
+        when: I compare the two documents
+        then: both list the same roles, dates and skills
+      - clause: 3
+        scenario: Section titles are real headings
+        given: I have exported the resume as a DOCX
+        when: I inspect the document structure
+        then: the section titles carry heading styles rather than being bold body text
+
+  # --- Preview fidelity (§8) -----------------------------------------------
+  - id: RG-017
+    source: "requirements-analysis.md §8 live preview"
+    feature: Live Preview Fidelity
+    title: Preview the resume exactly as it will print
+    as_a: job seeker adjusting my layout
+    i_want: the on-screen preview to match the exported PDF
+    so_that: I am not surprised by the document I send
+    description: >-
+      Preview and export render from the same template and the same theme
+      tokens, so what the user sees is what prints. The preview must reflect
+      pagination, so content that spills onto a second page is visible before
+      export. Where a genuine difference is unavoidable, such as a font that is
+      unavailable on screen, the preview must say so rather than render
+      something the PDF will not match.
+    acceptance_criteria:
+      - Preview and export render from the same template and theme settings.
+      - The preview shows page breaks where the exported document will break.
+      - Any unavoidable difference between preview and export is stated in the interface.
+    scenarios:
+      - clause: 1
+        scenario: A theme change appears in both preview and export
+        given: I have changed the section spacing to compact
+        when: I compare the preview with the exported PDF
+        then: both show the compact spacing
+      - clause: 2
+        scenario: Overflow onto a second page is visible before export
+        given: my content is slightly longer than one page
+        when: I look at the preview
+        then: a second page is shown with the overflowing content on it
+      - clause: 3
+        scenario: An unavailable preview font is disclosed
+        given: I have selected a font the preview cannot display
+        when: the preview renders
+        then: a note states that the exported document will differ from what is shown
+
+  # --- LinkedIn PDF fallback (§5) ------------------------------------------
+  - id: RG-018
+    source: "requirements-analysis.md §5 fallback"
+    feature: LinkedIn Profile PDF Fallback
+    title: Import a LinkedIn profile saved as PDF
+    as_a: LinkedIn user unwilling to wait for the data export
+    i_want: to upload my profile saved as a PDF
+    so_that: I can import my history immediately
+    description: >-
+      LinkedIn lets a member save their profile page as a PDF, and that file can
+      be fed through the same parsing pipeline as an uploaded resume rather than
+      through the CSV importer. The result is less structured than the official
+      export, so the user must be told which route produced the data and
+      encouraged to check it. The import route is recorded against the profile.
+    acceptance_criteria:
+      - The user can upload a LinkedIn profile PDF as an import source.
+      - The profile PDF is parsed through the resume parsing pipeline rather than the CSV importer.
+      - The interface states that this route is less structured than the official export.
+      - The import route used is recorded against the imported profile.
+    scenarios:
+      - clause: 1
+        scenario: Offering the profile PDF as an import source
+        given: I am choosing how to import my LinkedIn data
+        when: I view the available import sources
+        then: uploading a saved profile PDF is offered alongside the export archive
+      - clause: 2
+        scenario: A profile PDF goes through the resume parser
+        given: I have saved my LinkedIn profile as a PDF
+        when: I upload it as a LinkedIn import
+        then: my positions appear on the review screen without the CSV importer being used
+      - clause: 3
+        scenario: The trade-off is stated before upload
+        given: I am choosing between the export archive and the profile PDF
+        when: I select the profile PDF route
+        then: a note explains that this route extracts less reliably than the official export
+      - clause: 4
+        scenario: The import route is recorded
+        given: I imported my data from a LinkedIn profile PDF
+        when: I view the profile's import history
+        then: it records that the profile PDF route was used
+
+  # --- Academic CV (§4) ----------------------------------------------------
+  - id: RG-019
+    source: "requirements-analysis.md §4 launch formats"
+    feature: Academic CV Format
+    title: Produce a multi-page academic CV
+    as_a: researcher
+    i_want: a CV format that carries publications and teaching over several pages
+    so_that: I can apply for academic positions with the same profile data
+    description: >-
+      The academic CV differs from a resume in that length is expected rather
+      than penalised, and it carries sections a resume does not, notably
+      publications, research and teaching. It must page cleanly, repeating
+      section headings where a section continues onto the next page, and it
+      remains ATS safe. Sections with no entries are omitted rather than left as
+      empty headings.
+    acceptance_criteria:
+      - The academic CV format supports publications, research and teaching sections.
+      - The document flows over multiple pages without truncating content.
+      - A section continuing onto a new page repeats its heading.
+      - Sections with no entries are omitted from the output.
+    scenarios:
+      - clause: 1
+        scenario: Publications are rendered
+        given: my profile contains six publications
+        when: I export using the academic CV format
+        then: all six publications appear under a publications section
+      - clause: 2
+        scenario: Long content is not truncated
+        given: my profile contains more content than fits on one page
+        when: I export using the academic CV format
+        then: the document runs to as many pages as needed and no entry is dropped
+      - clause: 3
+        scenario: A continued section repeats its heading
+        given: my publications section spans a page break
+        when: I export using the academic CV format
+        then: the publications heading appears again on the following page
+      - clause: 4
+        scenario: An empty section is omitted
+        given: my profile contains no teaching entries
+        when: I export using the academic CV format
+        then: no teaching heading appears in the document
+
+  # --- Page setup (§8) -----------------------------------------------------
+  - id: RG-020
+    source: "requirements-analysis.md §4, §8"
+    feature: Page Size and Region Defaults
+    title: Support A4 and US Letter page sizes
+    as_a: job seeker applying in different countries
+    i_want: to choose the page size my target market expects
+    so_that: my resume prints correctly wherever it is received
+    description: >-
+      Both A4 and US Letter must be supported, and the choice must affect the
+      exported document rather than only the preview. Because the two sizes have
+      different proportions, changing size must reflow the content rather than
+      scale it, and a template that declares support for only one size must not
+      offer the other.
+    acceptance_criteria:
+      - The user can choose between A4 and US Letter.
+      - The chosen page size is applied to the exported document.
+      - Changing page size reflows the content rather than scaling it.
+      - A template supporting only one page size does not offer the other.
+    scenarios:
+      - clause: 1
+        scenario: Choosing between the two page sizes
+        given: I have selected a template that supports both page sizes
+        when: I open the page size selector
+        then: both A4 and US Letter are offered
+      - clause: 2
+        scenario: The chosen size reaches the exported file
+        given: I have selected US Letter
+        when: I export the resume
+        then: the exported PDF has US Letter page dimensions
+      - clause: 3
+        scenario: Content reflows on a size change
+        given: my resume fills one A4 page
+        when: I switch to US Letter
+        then: the text keeps its original point size and the line breaks are recalculated
+      - clause: 4
+        scenario: An unsupported size is not offered
+        given: I have selected a template whose manifest declares A4 only
+        when: I open the page size selector
+        then: US Letter is not offered as an option

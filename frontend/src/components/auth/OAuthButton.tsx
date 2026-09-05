@@ -2,6 +2,7 @@
 
 import { useState } from "react";
 import { signInWithOAuth } from "@/app/actions/auth";
+import { Button } from "@/components/ui/button";
 
 interface OAuthButtonProps {
   provider: "google" | "github";
@@ -30,16 +31,21 @@ export default function OAuthButton({ provider, label }: OAuthButtonProps) {
   }
 
   return (
-    <div className="space-y-1">
-      <button
+    <div className="space-y-1.5">
+      <Button
+        variant="outline"
+        size="lg"
         onClick={handleClick}
         disabled={isPending}
-        className="w-full rounded-xl border border-slate-200 bg-white px-6 py-2.5 text-sm font-semibold text-slate-700 shadow-sm transition hover:bg-slate-50 hover:border-slate-300 disabled:opacity-50 disabled:cursor-not-allowed"
+        loading={isPending}
+        className="w-full"
       >
         {isPending ? "Redirecting…" : label}
-      </button>
+      </Button>
       {error && (
-        <p className="text-xs text-rose-600">{error}</p>
+        <p className="text-xs text-fail-ink" role="alert">
+          {error}
+        </p>
       )}
     </div>
   );

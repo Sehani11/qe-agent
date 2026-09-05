@@ -2,6 +2,8 @@
 
 Status: done
 
+> **Amended 2026-08-22** ([maintenance record](maintenance-2026-08-22-ui-redesign-feature-file.md)): The login page was rebuilt on the new token system — the gradient background and `rounded-3xl border-sky-100 bg-white/90` card quoted here no longer exist. Fields come from the shared `Field`/`Input` primitives, submit buttons are `SubmitButton` (pending state via `useFormStatus`), and the page carries the `Wordmark` + `ThemeToggle` header. Auth errors stay **inline**, not toasts: they belong to the form and must survive a reload. Server-action behaviour is unchanged.
+
 <!-- Note: Validation is optional. Run validate-create-story for quality check before dev-story. -->
 
 ## Story

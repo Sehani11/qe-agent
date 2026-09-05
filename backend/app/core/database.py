@@ -16,6 +16,21 @@ engine = create_async_engine(
     future=True,
     pool_size=settings.db_pool_size,
     max_overflow=settings.db_max_overflow,
+    # Test a pooled connection before handing it out, and replace it if the
+    # server has gone away. Supabase's pooler closes idle connections, and
+    # SQLAlchemy otherwise serves the dead one straight from the pool: the
+    # failure lands on whatever query runs next, reported as
+    # `InterfaceError: connection is closed`, which reads like a database
+    # outage rather than an expired connection.
+    #
+    # The evaluation pipeline provoked this reliably. A single fine-tuned
+    # generation can run for ~175s on a holdout item with six AC clauses, and
+    # the session sits idle for that whole time before writing its row — so a
+    # run would die partway through, having done all the expensive work.
+    pool_pre_ping=True,
+    # Retire connections proactively rather than waiting for the pooler to do
+    # it. Cheap, because pre-ping already handles the ones that slip through.
+    pool_recycle=300,
     # Supabase uses PgBouncer in transaction mode which doesn't support
     # prepared statements — disable the cache to avoid DuplicatePreparedStatementError
     connect_args={"statement_cache_size": 0},

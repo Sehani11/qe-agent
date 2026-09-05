@@ -1,64 +1,24 @@
-"""Tests for the LLM Verification Service (Story 2.3).
+"""Tests for the shared verification helpers.
 
-Tests verification_service functions:
-  - parse_bdd_scenarios
-  - run_verification (async generator, mocked LLMProvider)
-
-Tests POST /run route:
-  - Returns text/event-stream content type
-  - Request body validation (missing session_id → 422)
+The legacy direct runner (and its POST /run route) was removed with
+the two-step flow; parse_bdd_scenarios remains as the shared Gherkin parser
+used by the agentic verification service.
 """
 
-import json
-from unittest.mock import AsyncMock, MagicMock, patch
+import uuid
 
-import pytest
-from fastapi.testclient import TestClient
-
-from app.core.auth import get_current_user
-from app.main import app
-from app.schemas.verification import FetchedFile
-from app.services.llm.provider import LLMProviderError
-from app.services.verification_service import parse_bdd_scenarios, run_verification
+from app.schemas.verification import CodeReference, VerificationVerdict
+from app.services.verification_service import (
+    _FILE_CONTENT_TRUNCATE,
+    build_verification_result,
+    deduplicate_scenarios,
+    parse_bdd_scenarios,
+    truncate_with_notice,
+)
 
 # ---------------------------------------------------------------------------
 # Fixtures
 # ---------------------------------------------------------------------------
-
-
-async def _mock_auth() -> str:
-    return "test-user-id"
-
-
-@pytest.fixture
-def client() -> TestClient:
-    app.dependency_overrides[get_current_user] = _mock_auth
-    yield TestClient(app)
-    app.dependency_overrides.clear()
-
-
-def _make_verdict_dict(
-    scenario_id: str,
-    title: str,
-    status: str = "pass",
-    implementation_suggestion: str | None = None,
-) -> dict:
-    return {
-        "scenario_id": scenario_id,
-        "scenario_title": title,
-        "status": status,
-        "justification": "The code handles this fully in `auth.login()`.",
-        "code_reference": {"file": "src/auth.py", "function": "login", "line": 42},
-        "github_links": ["src/auth.py"],
-        "implementation_suggestion": implementation_suggestion,
-    }
-
-
-def _make_db_session() -> MagicMock:
-    db = MagicMock()
-    db.add = MagicMock()
-    db.flush = AsyncMock()
-    return db
 
 
 # ---------------------------------------------------------------------------
@@ -117,288 +77,306 @@ class TestParseBddScenarios:
 
 
 # ---------------------------------------------------------------------------
-# run_verification
+# Verification source persistence
 # ---------------------------------------------------------------------------
 
 
-class TestRunVerification:
-    @pytest.mark.asyncio
-    async def test_happy_path_two_scenarios_yields_verdicts_and_complete(self) -> None:
-        bdd = "Scenario: Login\n  Given a user\nScenario: Logout\n  Given user\n"
-        files = [FetchedFile(path="src/auth.py", content="def login(): pass")]
+def test_build_verification_result_records_the_source_it_verified():
+    """The row carries the mode and the exact input the run was scoped to.
 
-        mock_llm = AsyncMock()
-        db = _make_db_session()
+    Without this a revisited session shows verdicts with no way to tell what
+    they were checked against, and the workspace cannot restore the source
+    field. `github_links` cannot stand in: those are links the LLM cited for a
+    single scenario, not the source the run was scoped to.
+    """
+    verdict = VerificationVerdict(
+        scenario_id=str(uuid.uuid4()),
+        scenario_title="User can log in",
+        status="pass",
+        justification="Handled in routes.py.",
+        code_reference=CodeReference(
+            file="src/auth/routes.py", function="login", line=42
+        ),
+        github_links=[],
+        implementation_suggestion=None,
+    )
 
-        call_count = 0
+    row = build_verification_result(
+        "session-1",
+        "user-1",
+        verdict,
+        None,
+        mode="pull_request",
+        github_input="https://github.com/org/repo/pull/42",
+    )
 
-        async def _generate_structured(prompt, system_prompt="", response_format=None):
-            nonlocal call_count
-            call_count += 1
-            scenarios = parse_bdd_scenarios(bdd)
-            idx = call_count - 1
-            return _make_verdict_dict(scenarios[idx]["id"], scenarios[idx]["title"])
+    assert row.verification_mode == "pull_request"
+    assert row.github_input == "https://github.com/org/repo/pull/42"
 
-        mock_llm.generate_structured = _generate_structured
 
-        events = []
-        async for chunk in run_verification(
-            "sess-1", "user-1", bdd, files, mock_llm, db
-        ):
-            events.append(json.loads(chunk[len("data: "):]))
+def test_build_verification_result_source_defaults_to_none():
+    """Callers predating the columns still build a valid row."""
+    verdict = VerificationVerdict(
+        scenario_id=str(uuid.uuid4()),
+        scenario_title="User can log in",
+        status="pass",
+        justification="Handled in routes.py.",
+        code_reference=CodeReference(
+            file="src/auth/routes.py", function="login", line=42
+        ),
+        github_links=[],
+        implementation_suggestion=None,
+    )
 
-        verdict_events = [e for e in events if e["type"] == "verdict"]
-        complete_events = [e for e in events if e["type"] == "complete"]
+    row = build_verification_result("session-1", "user-1", verdict, None)
 
-        assert len(verdict_events) == 2
-        assert len(complete_events) == 1
-        assert complete_events[0]["total"] == 2
-        assert complete_events[0]["passed"] == 2
-        assert complete_events[0]["failed"] == 0
-
-    @pytest.mark.asyncio
-    async def test_failed_scenario_has_non_null_implementation_suggestion(self) -> None:
-        bdd = "Scenario: Missing feature\n  Given it does not exist\n"
-        files = [FetchedFile(path="src/main.py", content="# empty")]
-
-        mock_llm = AsyncMock()
-        db = _make_db_session()
-
-        scenarios = parse_bdd_scenarios(bdd)
-        mock_llm.generate_structured = AsyncMock(
-            return_value=_make_verdict_dict(
-                scenarios[0]["id"],
-                scenarios[0]["title"],
-                status="fail",
-                implementation_suggestion=(
-                    "Implement the missing feature in src/main.py"
-                ),
-            )
-        )
-
-        events = []
-        async for chunk in run_verification(
-            "sess-1", "user-1", bdd, files, mock_llm, db
-        ):
-            events.append(json.loads(chunk[len("data: "):]))
-
-        verdict = next(e for e in events if e["type"] == "verdict")
-        assert verdict["status"] == "fail"
-        assert verdict["implementation_suggestion"] is not None
-
-    @pytest.mark.asyncio
-    async def test_passed_scenario_has_null_implementation_suggestion(self) -> None:
-        bdd = "Scenario: Working feature\n  Given it works\n"
-        files = [FetchedFile(path="src/main.py", content="def feature(): pass")]
-
-        mock_llm = AsyncMock()
-        db = _make_db_session()
-
-        scenarios = parse_bdd_scenarios(bdd)
-        mock_llm.generate_structured = AsyncMock(
-            return_value=_make_verdict_dict(
-                scenarios[0]["id"],
-                scenarios[0]["title"],
-                status="pass",
-                implementation_suggestion=None,
-            )
-        )
-
-        events = []
-        async for chunk in run_verification(
-            "sess-1", "user-1", bdd, files, mock_llm, db
-        ):
-            events.append(json.loads(chunk[len("data: "):]))
-
-        verdict = next(e for e in events if e["type"] == "verdict")
-        assert verdict["status"] == "pass"
-        assert verdict["implementation_suggestion"] is None
-
-    @pytest.mark.asyncio
-    async def test_llm_provider_error_emits_error_and_continues(self) -> None:
-        bdd = "Scenario: A\n  Given a\nScenario: B\n  Given b\n"
-        files = [FetchedFile(path="src/a.py", content="pass")]
-
-        mock_llm = AsyncMock()
-        db = _make_db_session()
-
-        call_count = 0
-        scenarios_parsed = parse_bdd_scenarios(bdd)
-
-        async def _generate_structured(prompt, system_prompt="", response_format=None):
-            nonlocal call_count
-            call_count += 1
-            if call_count == 1:
-                raise LLMProviderError("rate limited")
-            return _make_verdict_dict(
-                scenarios_parsed[1]["id"], scenarios_parsed[1]["title"]
-            )
-
-        mock_llm.generate_structured = _generate_structured
-
-        events = []
-        async for chunk in run_verification(
-            "sess-1", "user-1", bdd, files, mock_llm, db
-        ):
-            events.append(json.loads(chunk[len("data: "):]))
-
-        error_events = [e for e in events if e["type"] == "error"]
-        verdict_events = [e for e in events if e["type"] == "verdict"]
-        complete_events = [e for e in events if e["type"] == "complete"]
-
-        assert len(error_events) == 1
-        assert "rate limited" in error_events[0]["message"]
-        assert len(verdict_events) == 1
-        assert len(complete_events) == 1
-
-    @pytest.mark.asyncio
-    async def test_warning_paths_filtered_before_llm_call(self) -> None:
-        bdd = "Scenario: Check\n  Given x\n"
-        files = [
-            FetchedFile(
-                path="[WARNING] Tree truncated — only 100 of 500 files shown",
-                content="truncated",
-            ),
-            FetchedFile(path="src/real.py", content="def real(): pass"),
-        ]
-
-        mock_llm = AsyncMock()
-        db = _make_db_session()
-
-        captured_prompts: list[str] = []
-        scenarios = parse_bdd_scenarios(bdd)
-
-        async def _generate_structured(prompt, system_prompt="", response_format=None):
-            captured_prompts.append(prompt)
-            return _make_verdict_dict(scenarios[0]["id"], scenarios[0]["title"])
-
-        mock_llm.generate_structured = _generate_structured
-
-        async for _ in run_verification(
-            "sess-1", "user-1", bdd, files, mock_llm, db
-        ):
-            pass
-
-        assert len(captured_prompts) == 1
-        assert "[WARNING]" not in captured_prompts[0]
-        assert "src/real.py" in captured_prompts[0]
-
-    @pytest.mark.asyncio
-    async def test_empty_fetched_files_still_processes_scenarios(self) -> None:
-        bdd = "Scenario: Check\n  Given x\n"
-        files: list[FetchedFile] = []
-
-        mock_llm = AsyncMock()
-        db = _make_db_session()
-
-        scenarios = parse_bdd_scenarios(bdd)
-        mock_llm.generate_structured = AsyncMock(
-            return_value=_make_verdict_dict(scenarios[0]["id"], scenarios[0]["title"])
-        )
-
-        events = []
-        async for chunk in run_verification(
-            "sess-1", "user-1", bdd, files, mock_llm, db
-        ):
-            events.append(json.loads(chunk[len("data: "):]))
-
-        verdict_events = [e for e in events if e["type"] == "verdict"]
-        assert len(verdict_events) == 1
-
-    @pytest.mark.asyncio
-    async def test_no_scenarios_in_bdd_yields_error_and_no_db_writes(self) -> None:
-        bdd = "Feature: Nothing\n  Background:\n    Given setup\n"
-        files = [FetchedFile(path="src/x.py", content="pass")]
-
-        mock_llm = AsyncMock()
-        db = _make_db_session()
-
-        events = []
-        async for chunk in run_verification(
-            "sess-1", "user-1", bdd, files, mock_llm, db
-        ):
-            events.append(json.loads(chunk[len("data: "):]))
-
-        assert len(events) == 1
-        assert events[0]["type"] == "error"
-        assert "No BDD scenarios" in events[0]["message"]
-        db.add.assert_not_called()
-
-    @pytest.mark.asyncio
-    async def test_verdicts_persisted_to_db(self) -> None:
-        bdd = "Scenario: Persist me\n  Given x\n"
-        files = [FetchedFile(path="src/x.py", content="pass")]
-
-        mock_llm = AsyncMock()
-        db = _make_db_session()
-
-        scenarios = parse_bdd_scenarios(bdd)
-        mock_llm.generate_structured = AsyncMock(
-            return_value=_make_verdict_dict(scenarios[0]["id"], scenarios[0]["title"])
-        )
-
-        async for _ in run_verification(
-            "sess-1", "user-1", bdd, files, mock_llm, db
-        ):
-            pass
-
-        db.add.assert_called_once()
-        db.flush.assert_called_once()
+    assert row.verification_mode is None
+    assert row.github_input is None
 
 
 # ---------------------------------------------------------------------------
-# POST /run route tests
+# truncate_with_notice — silent truncation is the bug this guards against
 # ---------------------------------------------------------------------------
 
 
-class TestRunVerificationEndpoint:
-    def test_returns_text_event_stream_content_type(self, client: TestClient) -> None:
-        bdd = "Scenario: A\n  Given x\n"
-        files = [{"path": "src/a.py", "content": "pass"}]
+class TestTruncateWithNotice:
+    def test_content_under_the_cap_is_returned_unchanged(self) -> None:
+        content = "def login():\n    return True\n"
+        assert truncate_with_notice(content, "src/auth.py") == content
 
-        mock_verdict = {
-            "scenario_id": "00000000-0000-0000-0000-000000000001",
-            "scenario_title": "A",
-            "status": "pass",
-            "justification": "ok",
-            "code_reference": {"file": "src/a.py", "function": "main", "line": 1},
-            "github_links": [],
-            "implementation_suggestion": None,
-        }
+    def test_content_at_exactly_the_cap_is_not_annotated(self) -> None:
+        content = "x" * _FILE_CONTENT_TRUNCATE
+        assert truncate_with_notice(content, "src/big.py") == content
 
-        async def _fake_run(**_kwargs):
-            yield f"data: {json.dumps({'type': 'verdict', **mock_verdict})}\n\n"
-            complete = {'type': 'complete', 'total': 1, 'passed': 1, 'failed': 0}
-            yield f"data: {json.dumps(complete)}\n\n"
+    def test_oversized_content_keeps_the_cap_and_announces_the_rest(self) -> None:
+        content = "y" * (_FILE_CONTENT_TRUNCATE + 500)
+        result = truncate_with_notice(content, "src/big.py")
 
-        _run_path = (
-            "app.api.v1.verification.verification_service.run_verification"
+        assert result.startswith("y" * _FILE_CONTENT_TRUNCATE)
+        assert "TRUNCATED" in result
+        # The notice must carry the three facts a reader needs to recover:
+        # how much was withheld, that it is not the whole file, and where to
+        # resume from.
+        assert str(len(content)) in result
+        assert "NOT the whole file" in result
+        assert f"offset={_FILE_CONTENT_TRUNCATE}" in result
+        assert "src/big.py" in result
+
+
+# ---------------------------------------------------------------------------
+# deduplicate_scenarios — deciding the same question twice costs twice
+# ---------------------------------------------------------------------------
+
+
+class TestDeduplicateScenarios:
+    def test_distinct_scenarios_are_all_kept(self) -> None:
+        scenarios = parse_bdd_scenarios(
+            "Scenario: User logs in\n  Given a user\n  When they log in\n"
+            "  Then they see the dashboard\n"
+            "Scenario: User resets a password\n  Given a user\n"
+            "  When they request a reset\n  Then they receive an email\n"
         )
-        with (
-            patch(_run_path, side_effect=_fake_run),
-            patch("app.api.v1.verification.get_llm_provider", return_value=MagicMock()),
-        ):
-            response = client.post(
-                "/api/v1/verification/run",
-                json={
-                    "session_id": "sess-abc",
-                    "bdd_content": bdd,
-                    "fetched_files": files,
-                },
-            )
+        kept, dropped = deduplicate_scenarios(scenarios)
+        assert len(kept) == 2
+        assert dropped == 0
 
-        assert response.status_code == 200
-        assert "text/event-stream" in response.headers["content-type"]
+    def test_an_exact_repeat_is_dropped(self) -> None:
+        one = "Scenario: User logs in\n  Given a user\n  When they log in\n  Then ok\n"
+        kept, dropped = deduplicate_scenarios(parse_bdd_scenarios(one + one))
+        assert len(kept) == 1
+        assert dropped == 1
 
-    def test_missing_session_id_returns_422(self, client: TestClient) -> None:
-        response = client.post(
-            "/api/v1/verification/run",
-            json={
-                "bdd_content": "Scenario: A\n  Given x\n",
-                "fetched_files": [],
-            },
+    def test_a_reworded_repeat_is_dropped(self) -> None:
+        # The near-duplicate case that actually happens: same scenario, minor
+        # punctuation and casing differences from a second generation pass.
+        bdd = (
+            "Scenario: User logs in\n  Given a registered user\n"
+            "  When they submit valid credentials\n  Then they are authenticated\n"
+            "Scenario: User logs in!\n  Given a Registered user,\n"
+            "  When they submit valid credentials.\n  Then they are authenticated!\n"
         )
-        assert response.status_code == 422
-        body = response.json()
-        assert body["error"] == "VALIDATION_ERROR"
-        assert body["code"] == 422
+        kept, dropped = deduplicate_scenarios(parse_bdd_scenarios(bdd))
+        assert len(kept) == 1
+        assert dropped == 1
+
+    def test_order_is_preserved_and_the_first_copy_wins(self) -> None:
+        bdd = (
+            "Scenario: Alpha\n  Given a\n  When b\n  Then c\n"
+            "Scenario: Beta\n  Given d\n  When e\n  Then f\n"
+            "Scenario: Alpha\n  Given a\n  When b\n  Then c\n"
+        )
+        kept, dropped = deduplicate_scenarios(parse_bdd_scenarios(bdd))
+        assert [s["title"] for s in kept] == ["Alpha", "Beta"]
+        assert dropped == 1
+
+    def test_a_shared_title_with_different_checks_is_kept(self) -> None:
+        # Dropping these would silently delete coverage, which is far worse than
+        # paying for one extra scenario.
+        bdd = (
+            "Scenario: Filtering\n  Given interviewers exist\n"
+            "  When the candidate filters by domain\n  Then only that domain remains\n"
+            "Scenario: Filtering\n  Given interviewers exist\n"
+            "  When the candidate sets a minimum rating\n"
+            "  Then unrated interviewers are excluded\n"
+        )
+        kept, dropped = deduplicate_scenarios(parse_bdd_scenarios(bdd))
+        assert len(kept) == 2
+        assert dropped == 0
+
+    def test_an_empty_list_is_handled(self) -> None:
+        assert deduplicate_scenarios([]) == ([], 0)
+
+    def test_short_scenarios_differing_by_one_word_are_both_kept(self) -> None:
+        # Similarity is unreliable over a few words: these score as near
+        # identical because nearly every character is shared boilerplate.
+        # Dropping one would delete coverage the reader still believes they have.
+        bdd = (
+            "Scenario: A\n  Given a user\n  When they do A\n  Then A happens\n"
+            "Scenario: B\n  Given a user\n  When they do B\n  Then B happens\n"
+        )
+        kept, dropped = deduplicate_scenarios(parse_bdd_scenarios(bdd))
+        assert len(kept) == 2
+        assert dropped == 0
+
+    def test_a_short_scenario_repeated_exactly_is_still_dropped(self) -> None:
+        one = "Scenario: A\n  Given a user\n  When they do A\n  Then A happens\n"
+        kept, dropped = deduplicate_scenarios(parse_bdd_scenarios(one + one))
+        assert len(kept) == 1
+        assert dropped == 1
+
+
+# ---------------------------------------------------------------------------
+# Source AC attribution — each scenario owns its own clause, not its neighbour's
+# ---------------------------------------------------------------------------
+
+
+_AC_BDD = """\
+Feature: Discovery
+
+  # Source AC: clause ALPHA
+  Scenario: Alpha
+    Given a user
+    When they browse
+    Then they see interviewers
+
+  # Source AC: clause BETA
+  Scenario: Beta
+    Given a user
+    When they filter
+    Then results narrow
+"""
+
+
+class TestSourceAcAttribution:
+    def test_each_scenario_gets_its_own_clause(self) -> None:
+        alpha, beta = parse_bdd_scenarios(_AC_BDD)
+        assert alpha["ac_clause"] == "clause ALPHA"
+        assert beta["ac_clause"] == "clause BETA"
+
+    def test_a_scenario_does_not_carry_its_neighbours_clause(self) -> None:
+        # The bug this replaces: the block ran to the next scenario's header, so
+        # it swallowed the comment introducing that scenario. Every prompt then
+        # showed the model an acceptance criterion it was not judging.
+        alpha, beta = parse_bdd_scenarios(_AC_BDD)
+        assert "BETA" not in alpha["text"]
+        assert "ALPHA" not in beta["text"]
+
+    def test_the_first_scenarios_clause_is_not_lost(self) -> None:
+        # It sits above the first header, so an offset-based slice never saw it.
+        assert parse_bdd_scenarios(_AC_BDD)[0]["ac_clause"] == "clause ALPHA"
+
+    def test_steps_survive_the_trimming(self) -> None:
+        alpha = parse_bdd_scenarios(_AC_BDD)[0]
+        assert "Given a user" in alpha["text"]
+        assert "Then they see interviewers" in alpha["text"]
+
+    def test_a_file_without_traceability_comments_has_empty_clauses(self) -> None:
+        scenarios = parse_bdd_scenarios("Scenario: Plain\n  Given a\n  Then b\n")
+        assert scenarios[0]["ac_clause"] == ""
+
+    def test_an_unrelated_comment_is_not_mistaken_for_a_clause(self) -> None:
+        bdd = "  # written by hand\n  Scenario: Plain\n    Given a\n    Then b\n"
+        assert parse_bdd_scenarios(bdd)[0]["ac_clause"] == ""
+
+
+# ---------------------------------------------------------------------------
+# Deduplication by shared intent (title + acceptance clause)
+# ---------------------------------------------------------------------------
+
+
+_SHARED_AC = (
+    "  # Source AC: Availability is matched as a case-insensitive substring "
+    "against the declared availability slots."
+)
+
+
+class TestDeduplicateBySharedIntent:
+    def test_a_reworded_duplicate_under_one_ac_is_dropped(self) -> None:
+        # Same title, same clause, steps rewritten — the shape that survived
+        # pure text matching and had the same scenario verified twice.
+        bdd = (
+            f"Feature: D\n{_SHARED_AC}\n"
+            "  Scenario: Availability filter functionality\n"
+            "    Given interviewers with availability slots\n"
+            "    When the candidate enters weekends\n"
+            "    Then only interviewers available at weekends remain\n"
+            f"{_SHARED_AC}\n"
+            "  Scenario: Availability filter functionality\n"
+            "    Given interviewers declaring availability\n"
+            "    When the candidate types weekends into the availability box\n"
+            "    Then the list shows only those free at weekends\n"
+        )
+        kept, dropped = deduplicate_scenarios(parse_bdd_scenarios(bdd))
+        assert len(kept) == 1
+        assert dropped == 1
+
+    def test_different_checks_under_one_ac_are_both_kept(self) -> None:
+        # Same title and clause, but one tests the match and the other tests
+        # case-insensitivity. Dropping either would delete real coverage.
+        bdd = (
+            f"Feature: D\n{_SHARED_AC}\n"
+            "  Scenario: Availability filter functionality\n"
+            "    Given interviewers with availability slots\n"
+            "    When the candidate enters weekends\n"
+            "    Then only interviewers available at weekends remain\n"
+            f"{_SHARED_AC}\n"
+            "  Scenario: Availability filter functionality\n"
+            "    Given an interviewer whose slot is stored as Weekday Evenings\n"
+            "    When the candidate types EVENINGS in upper case\n"
+            "    Then that interviewer is still matched because search ignores case\n"
+        )
+        kept, dropped = deduplicate_scenarios(parse_bdd_scenarios(bdd))
+        assert len(kept) == 2
+        assert dropped == 0
+
+    def test_different_titles_under_one_ac_are_kept(self) -> None:
+        # One acceptance criterion routinely needs several scenarios; differing
+        # titles are how they are told apart.
+        bdd = (
+            f"Feature: D\n{_SHARED_AC}\n"
+            "  Scenario: Filter by domain\n"
+            "    Given interviewers in several domains\n"
+            "    When the candidate selects Backend\n"
+            "    Then only Backend interviewers remain\n"
+            f"{_SHARED_AC}\n"
+            "  Scenario: Filter by minimum rating\n"
+            "    Given interviewers with and without ratings\n"
+            "    When the candidate selects a four star minimum\n"
+            "    Then unrated interviewers are excluded from the results\n"
+        )
+        kept, dropped = deduplicate_scenarios(parse_bdd_scenarios(bdd))
+        assert len(kept) == 2
+        assert dropped == 0
+
+    def test_a_shared_title_without_a_clause_never_merges(self) -> None:
+        # No traceability comment means no identity, so the weak signal of a
+        # shared title alone can never drop anything.
+        bdd = (
+            "Scenario: Filtering\n  Given interviewers exist\n"
+            "  When the candidate filters by domain\n  Then that domain remains\n"
+            "Scenario: Filtering\n  Given interviewers exist\n"
+            "  When the candidate sets a rating\n  Then unrated are excluded\n"
+        )
+        kept, dropped = deduplicate_scenarios(parse_bdd_scenarios(bdd))
+        assert len(kept) == 2
+        assert dropped == 0

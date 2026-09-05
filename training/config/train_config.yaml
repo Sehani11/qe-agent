@@ -1,0 +1,134 @@
+# Fine-tuning configuration — Story 6.5
+#
+# SINGLE SOURCE OF TRUTH for the training run. finetune_bdd.py (and the notebook
+# generated from it) reads every value from here rather than hard-coding them in
+# cells, so that filling in RUN_LOG.md afterwards is transcription rather than
+# archaeology, and so a run can be reproduced by shipping this file alone.
+#
+# Every key below is READ by finetune_bdd.py. If you add one, wire it up in the
+# same commit — a key that looks like a knob but turns nothing is worse than no
+# key at all. (Story 6.5 review finding: `use_gradient_checkpointing: "unsloth"`
+# and `export_gguf: true` both sat here doing nothing, the latter promising an
+# export that never happened and that serve/README.md then told you to use.)
+#
+# Nothing here is installed into backend/. Training dependencies must never
+# enter backend/pyproject.toml — the backend Dockerfile's `COPY . .` would ship
+# gigabytes of CUDA wheels into an image that only ever performs inference.
+
+model:
+  # 4-bit QLoRA on a <=8B instruct base fits a free T4 (16 GB) comfortably.
+  # Prefer a base with strong JSON adherence — every target in this dataset is
+  # a JSON object, not prose.
+  #
+  # Qwen2.5 is the default specifically because it is NOT gated on Hugging Face.
+  # A Kaggle kernel runs unattended with no HF token available, and a gated
+  # base (any Llama derivative) fails there with a 401 that looks like a network
+  # problem. Swap to `unsloth/Meta-Llama-3.1-8B-Instruct-bnb-4bit` only if you
+  # have accepted its licence and supply HF_TOKEN to the kernel.
+  #
+  # RUN 3 = MODEL-SIZE ABLATION (2026-08-15). This line is the ONLY difference
+  # from Run 2. Every other value in this file — seed, learning rate, epochs,
+  # batch size, LoRA rank, sequence length — and the dataset itself are held
+  # identical on purpose, so any difference in the result is attributable to
+  # model size alone. Do not "tune" anything else for the smaller model: a
+  # second changed variable destroys the comparison.
+  #
+  # Verified ungated 2026-08-15: 1.5B / 3B / 7B all resolve on the HF API.
+  # Run 2 (7B) was `unsloth/Qwen2.5-7B-Instruct-bnb-4bit`; its adapter is
+  # preserved at training/outputs/run-2-qwen7b/.
+  #
+  # Why smaller: a 7B at q4 needs ~5 GB and so runs on CPU on a 2 GB laptop
+  # GPU (~45 s/request, against a 12 s budget). A 1.5B at q4 is ~1.1 GB and
+  # fits in VRAM. Expect quality to DROP — the corpus is the known constraint
+  # (Story 6.3, and Run 2's null result), and a smaller model cannot fix data.
+  base_model: "unsloth/Qwen2.5-1.5B-Instruct-bnb-4bit"
+  load_in_4bit: true
+  max_seq_length: 2048
+  # Leave null to use the base model's own chat template.
+  #
+  # Whatever template is used here is what the SERVING SHIM must reproduce. The
+  # run writes the resolved template to `<adapter_dir>/chat_template.jinja`, and
+  # training/serve/app.py verifies the served model against that file rather
+  # than assuming they agree — a shim that formats prompts differently from
+  # training degrades quality silently, with no error to notice.
+  chat_template: null
+  # bitsandbytes 4-bit settings. nf4 + double quant is the standard QLoRA recipe.
+  bnb_4bit_quant_type: "nf4"
+  bnb_4bit_use_double_quant: true
+  bnb_4bit_compute_dtype: "float16"
+
+lora:
+  r: 16
+  alpha: 16
+  dropout: 0.0
+  bias: "none"
+  target_modules:
+    - q_proj
+    - k_proj
+    - v_proj
+    - o_proj
+    - gate_proj
+    - up_proj
+    - down_proj
+  # Trades compute for VRAM. Required to fit a 7B at 2048 tokens on a 16 GB T4.
+  use_gradient_checkpointing: true
+
+training:
+  # 182 examples is a small dataset, so more passes rather than more data.
+  # Watch eval loss: if it rises while train loss falls, drop to 2 epochs.
+  num_train_epochs: 3
+  learning_rate: 2.0e-4
+  lr_scheduler_type: "linear"
+  warmup_ratio: 0.05
+  per_device_train_batch_size: 2
+  gradient_accumulation_steps: 4   # effective batch size 8
+  weight_decay: 0.01
+  optim: "adamw_8bit"
+  seed: 3407
+  logging_steps: 5
+  # Must match bnb_4bit_compute_dtype. A T4 has no bf16.
+  fp16: true
+  # AC7 requires a measured eval loss, so the holdout must actually be
+  # evaluated — not merely written to disk.
+  eval_strategy: "epoch"
+
+data:
+  # Both files are git-ignored, so they must be uploaded into the Kaggle/Colab
+  # session by hand. See the notebook's first data cell.
+  train_path: "data/train.jsonl"
+  holdout_path: "data/holdout.jsonl"
+
+evaluation:
+  # The post-training smoke test: does the tuned model emit something
+  # BDDGenerateResponse can parse? A low loss on a model that returns prose is
+  # worthless, because bdd_service validates every response.
+  #
+  # Also the generation budget for holdout scoring below. An item whose JSON is
+  # cut off mid-object counts as a parse failure, so raise this rather than
+  # explain away a low parse rate.
+  sample_max_new_tokens: 768
+  # Score the WHOLE holdout after training and print the metrics into the run
+  # table: AC-clause coverage, duplicate rate, reference alignment.
+  #
+  # Loss alone does not answer "is this model any good at the task". Run 3 has
+  # a WORSE eval loss than Run 2 and BETTER coverage — they can point in
+  # opposite directions, and coverage is the one the evaluation report is
+  # written from. Doing it on the GPU that just trained the adapter costs a few
+  # minutes; the same items cost ~62 s EACH through the local serving path,
+  # where the model does not fit in VRAM.
+  #
+  # Turn off only if GPU quota is genuinely tight. The run then prints
+  # "Holdout scoring | not run" rather than quietly omitting the rows.
+  score_holdout: true
+  # Cap the number of holdout items scored; 0 means all of them. Use a small
+  # number to smoke-test a config change cheaply — but a partial score is NOT
+  # comparable with a full one, so set it back to 0 for any run that goes in
+  # RUN_LOG.md.
+  holdout_max_items: 0
+
+output:
+  adapter_dir: "outputs/bdd-lora"
+  # NOTE: there is no GGUF export step. It was Unsloth-specific and left with
+  # unsloth (see RUN_LOG.md). The run saves the LoRA adapter, the tokenizer and
+  # the resolved chat template; converting that to GGUF for Ollama is a
+  # documented manual step in training/serve/README.md.

@@ -70,4 +70,3 @@ npx vitest
 - `frontend/` — Next.js 16 app (App Router), Tailwind, vitest
 - `docker-compose.yml` — local all-in-Docker setup
 - `cfn/`, `HOW_TO_DEPLOY.md` — deployment artifacts
-# qe-agent

@@ -2,13 +2,14 @@
 
 import { redirect } from "next/navigation";
 import { createServerSupabaseClient } from "@/lib/supabase/server";
+import { classifyAuthError } from "@/lib/auth/errors";
 
 export async function signUp(formData: FormData): Promise<void> {
   const email = formData.get("email") as string;
   const password = formData.get("password") as string;
 
   if (!email || !password) {
-    redirect("/login?error=" + encodeURIComponent("Email and password are required."));
+    redirect("/login?error=missing_fields");
   }
 
   const supabase = await createServerSupabaseClient();
@@ -21,16 +22,15 @@ export async function signUp(formData: FormData): Promise<void> {
     },
   });
 
+  // The provider's own wording never reaches the URL — it is classified into a
+  // stable code the login page knows how to render.
   if (error) {
-    redirect(
-      "/login?error=" +
-        encodeURIComponent(error.message || "Registration failed. Please try again.")
-    );
+    redirect("/login?error=" + classifyAuthError(error, "signup_failed"));
   }
 
   // Supabase requires email confirmation by default — session is null until confirmed
   if (!data.session) {
-    redirect("/login?message=" + encodeURIComponent("check-your-email"));
+    redirect("/login?message=check-your-email");
   }
 
   redirect("/");
@@ -41,16 +41,14 @@ export async function signInWithPassword(formData: FormData): Promise<void> {
   const password = formData.get("password") as string;
 
   if (!email || !password) {
-    redirect("/login?error=" + encodeURIComponent("Email and password are required."));
+    redirect("/login?error=missing_fields");
   }
 
   const supabase = await createServerSupabaseClient();
   const { error } = await supabase.auth.signInWithPassword({ email, password });
 
   if (error) {
-    redirect(
-      "/login?error=" + encodeURIComponent(error.message || "Invalid email or password.")
-    );
+    redirect("/login?error=" + classifyAuthError(error, "invalid_credentials"));
   }
 
   redirect("/");

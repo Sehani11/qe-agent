@@ -2,23 +2,38 @@
 
 import { useEffect, useRef, useState } from "react";
 import { useParams, useRouter } from "next/navigation";
+import { Plus } from "lucide-react";
 import { useQueryClient } from "@tanstack/react-query";
 import { useSessionContext } from "@/context/SessionContext";
 import { useBDDGenerate, scenariosToGherkin } from "@/lib/hooks/useBDDGenerate";
 import { useSession, useSessionBDD, useSessionVerificationResults } from "@/lib/hooks/useSession";
 import { useRunVerification } from "@/lib/hooks/useRunVerification";
 import apiClient from "@/lib/api/client";
-import Link from "next/link";
-import { ArrowLeft } from "lucide-react";
+import AppNav from "@/components/layout/AppNav";
+import FineTunedToggle from "@/components/model/FineTunedToggle";
+import { useActiveProjectId } from "@/lib/stores/projectStore";
+import TrainingOptInToggle from "@/components/model/TrainingOptInToggle";
+import { Button } from "@/components/ui/button";
+import { ConfirmModal } from "@/components/ui/confirm-modal";
+import { Input } from "@/components/ui/field";
+import { InlineLoader } from "@/components/ui/loaders";
+import { useToast } from "@/components/ui/toast";
 import TerminalProgressLog from "@/components/pipeline/TerminalProgressLog";
 import BDDEditorPanel from "@/components/pipeline/BDDEditorPanel";
 import GitHubSourceSelector from "@/components/pipeline/GitHubSourceSelector";
 import VerificationResultsPanel from "@/components/pipeline/VerificationResultsPanel";
-import type { CodeReference, VerificationVerdict } from "@/lib/types/verification";
+import ChatPanel from "@/components/pipeline/ChatPanel";
+import {
+    DEFAULT_VERIFICATION_MODE,
+    type CodeReference,
+    type RagContextItem,
+    type VerificationVerdict,
+} from "@/lib/types/verification";
 
 interface IngestResponse {
     session_id: string;
     jira_ticket_id: string;
+    jira_ticket_url: string;
     acceptance_criteria: string;
     status: string;
 }
@@ -27,11 +42,14 @@ export default function SessionPipelinePage() {
     const router = useRouter();
     const params = useParams();
     const routeSessionId = params.sessionId as string;
+    const toast = useToast();
     const {
         sessionId,
         setSessionId,
         jiraTicketId,
         setJiraTicketId,
+        jiraTicketUrl,
+        setJiraTicketUrl,
         acceptanceCriteria,
         setAcceptanceCriteria,
         bddContent,
@@ -48,16 +66,21 @@ export default function SessionPipelinePage() {
         setGithubInput,
         verificationMode,
         githubInput,
+        useKnowledgeBase,
+        codeIndexEnabled,
         verificationResults,
         verificationSummary,
         setVerificationResults,
         setVerificationSummary,
         setBddScenarios,
         setLogs,
-        setFetchedFiles,
+        resetSession,
     } = useSessionContext();
 
-    const { runVerification, isVerifying } = useRunVerification();
+    const { runVerification, stopVerification, isVerifying } = useRunVerification();
+    // Scopes every action on this page: which Jira the ticket comes from,
+    // and which GitHub token reads the repository.
+    const activeProjectId = useActiveProjectId();
     const queryClient = useQueryClient();
 
     // Load existing session BDD and verification results (Story 3.5)
@@ -94,6 +117,15 @@ export default function SessionPipelinePage() {
         sessionId !== routeSessionId &&
         sessionId !== ingestedSessionIdRef.current;
 
+    // Seeded from context so the ticket the user typed survives the route
+    // change from the throwaway session id to the real one after ingestion.
+    const [ticketInput, setTicketInput] = useState(jiraTicketUrl ?? "");
+    const [ticketInputError, setTicketInputError] = useState<string | null>(null);
+
+    // Both the ingest and the generate paths overwrite the editor, so they share
+    // one slot — only one confirmation can ever be open at a time.
+    const [pendingAction, setPendingAction] = useState<"ingest" | "generate" | null>(null);
+
     const bddPopulatedForRef = useRef<string | null>(null);
     const verificationPopulatedForRef = useRef<string | null>(null);
     const previousSessionIdRef = useRef<string | null>(sessionId);
@@ -126,16 +158,18 @@ export default function SessionPipelinePage() {
         verificationPopulatedForRef.current = null;
         setSessionId(null);
         setJiraTicketId(null);
+        setJiraTicketUrl(null);
+        setTicketInput("");
+        setTicketInputError(null);
         setAcceptanceCriteria(null);
         setBddContent("");
         setBddScenarios([]);
         setVerificationResults([]);
         setVerificationSummary(null);
-        setVerificationMode(null);
+        setVerificationMode(DEFAULT_VERIFICATION_MODE);
         setGithubInput("");
         setGlobalError(null);
         setLogs([]);
-        setFetchedFiles([]);
         setIsIngesting(false);
         setIsGeneratingBDD(false);
         setIsVerifying(false);
@@ -145,6 +179,9 @@ export default function SessionPipelinePage() {
         queryClient,
         setSessionId,
         setJiraTicketId,
+        setJiraTicketUrl,
+        setTicketInput,
+        setTicketInputError,
         setAcceptanceCriteria,
         setBddContent,
         setBddScenarios,
@@ -154,7 +191,6 @@ export default function SessionPipelinePage() {
         setGithubInput,
         setGlobalError,
         setLogs,
-        setFetchedFiles,
         setIsIngesting,
         setIsGeneratingBDD,
         setIsVerifying,
@@ -189,6 +225,18 @@ export default function SessionPipelinePage() {
         }
     }, [existingBDD, routeSessionId, setSessionId, setBddContent, setBddScenarios]);
 
+    // Put the submitted ticket reference back in the field when a saved session
+    // is opened. Falls back to the extracted key for sessions ingested before
+    // the URL was persisted, and for those created by uploading a .feature file.
+    // Only fills an untouched field, so it can never overwrite what someone is
+    // mid-way through typing.
+    useEffect(() => {
+        if (!existingSession) return;
+        const submitted = existingSession.jira_ticket_url ?? existingSession.jira_ticket_id;
+        setTicketInput((current) => (current.trim() === "" ? submitted : current));
+        setJiraTicketUrl(submitted);
+    }, [existingSession, setJiraTicketUrl]);
+
     // Restore jiraTicketId from saved session metadata (only if not already set from ingestion)
     useEffect(() => {
         if (!existingSession || jiraTicketId) return;
@@ -207,39 +255,72 @@ export default function SessionPipelinePage() {
             code_reference: r.code_reference as unknown as CodeReference,
             github_links: r.github_links as string[],
             implementation_suggestion: r.implementation_suggestion,
+            rag_context: (r.rag_context ?? null) as RagContextItem[] | null,
         }));
         setVerificationResults(mapped);
         const passed = existingVerificationResults.filter((r) => r.status === "pass").length;
         const failed = existingVerificationResults.filter((r) => r.status === "fail").length;
-        setVerificationSummary({ total: existingVerificationResults.length, passed, failed });
-    }, [existingVerificationResults, routeSessionId, setVerificationResults, setVerificationSummary]);
+        // Counted explicitly rather than as "everything else", so a status this
+        // build does not know about cannot quietly inflate the undecided count.
+        const inconclusive = existingVerificationResults.filter(
+            (r) => r.status === "inconclusive",
+        ).length;
+        const partial = existingVerificationResults.filter(
+            (r) => r.status === "partial",
+        ).length;
+        setVerificationSummary({
+            total: existingVerificationResults.length,
+            passed,
+            failed,
+            inconclusive,
+            partial,
+        });
 
-    const [ticketInput, setTicketInput] = useState("");
-    const [ticketInputError, setTicketInputError] = useState<string | null>(null);
+        // Restore the source the LAST run used, so re-running a past session
+        // does not mean retyping the URL from memory. Results come back oldest
+        // first, so the newest row that actually recorded a source wins — older
+        // rows predate the columns and carry null.
+        const latestWithSource = [...existingVerificationResults]
+            .reverse()
+            .find((r) => r.github_input);
+        if (latestWithSource?.github_input) {
+            if (latestWithSource.verification_mode) {
+                setVerificationMode(latestWithSource.verification_mode);
+            }
+            setGithubInput(latestWithSource.github_input);
+        }
+    }, [
+        existingVerificationResults,
+        routeSessionId,
+        setVerificationResults,
+        setVerificationSummary,
+        setVerificationMode,
+        setGithubInput,
+    ]);
+
     const generateBDD = useBDDGenerate();
 
-    const handleIngestTrigger = async () => {
+    const runIngest = async () => {
         const rawVal = ticketInput.trim();
-        if (!rawVal) {
-            setTicketInputError("Ticket ID cannot be empty.");
-            return;
-        }
-        setTicketInputError(null);
+        if (!rawVal) return;
 
+        setPendingAction(null);
         setGlobalError(null);
         setIsIngesting(true);
         setJiraTicketId(rawVal);
+        setJiraTicketUrl(rawVal);
         setAcceptanceCriteria(null);
         setBddContent("");
         // FIX M2: Reset GitHub verification state so stale mode/input don't resurface
         // when BDD is generated for the new ticket.
-        setVerificationMode(null);
+        setVerificationMode(DEFAULT_VERIFICATION_MODE);
         setGithubInput("");
         setVerificationResults([]);
         setVerificationSummary(null);
 
         try {
             const response = await apiClient.post<IngestResponse>("/ingestion/ingest", {
+                project_id: activeProjectId,
                 ticket_id_or_url: rawVal,
             });
 
@@ -249,8 +330,15 @@ export default function SessionPipelinePage() {
             ingestedSessionIdRef.current = response.data.session_id;
             setSessionId(response.data.session_id);
             setJiraTicketId(response.data.jira_ticket_id);
+            // The server echoes back what it stored, so the field keeps showing
+            // the URL the user submitted rather than being cleared on success.
+            setJiraTicketUrl(response.data.jira_ticket_url);
+            setTicketInput(response.data.jira_ticket_url);
             setAcceptanceCriteria(response.data.acceptance_criteria ?? null);
             setBddContent("");
+            toast.success("Ticket fetched", {
+                description: `${response.data.jira_ticket_id} is ready. Generate BDD to turn its criteria into scenarios.`,
+            });
             router.replace(`/session/${response.data.session_id}`);
         } catch (error: unknown) {
             let message = "Ticket ingestion failed.";
@@ -269,16 +357,21 @@ export default function SessionPipelinePage() {
             }
 
             setGlobalError(message);
+            toast.error("Could not fetch that ticket", { description: message });
         } finally {
             setIsIngesting(false);
         }
     };
 
-    const handleGenerateBDD = () => {
+    const runGenerateBDD = () => {
         const activeSessionId = sessionId || routeSessionId;
 
+        setPendingAction(null);
+
         if (!activeSessionId || !acceptanceCriteria) {
-            setGlobalError("Ingest a Jira ticket first to retrieve acceptance criteria.");
+            const message = "Ingest a Jira ticket first to retrieve acceptance criteria.";
+            setGlobalError(message);
+            toast.warning("No acceptance criteria yet", { description: message });
             return;
         }
 
@@ -295,11 +388,17 @@ export default function SessionPipelinePage() {
                     setBddScenarios(data.scenarios);
                     setBddContent(scenariosToGherkin(data.scenarios));
                     setIsGeneratingBDD(false);
+                    toast.success("BDD generated", {
+                        description: `${data.scenarios.length} ${
+                            data.scenarios.length === 1 ? "scenario" : "scenarios"
+                        } written. Edit them, then verify against a repo.`,
+                    });
                 },
                 onError: (error) => {
                     const message = error instanceof Error ? error.message : "BDD generation failed.";
                     setGlobalError(message);
                     setIsGeneratingBDD(false);
+                    toast.error("BDD generation failed", { description: message });
                 },
             }
         );
@@ -316,10 +415,61 @@ export default function SessionPipelinePage() {
 
         runVerification({
             session_id: activeSessionId,
+            project_id: activeProjectId,
             bdd_content: bddContent,
             mode: verificationMode,
             github_input: githubInput,
+            use_knowledge_base: useKnowledgeBase,
+            code_index_enabled: codeIndexEnabled,
         });
+    };
+
+    // Work that a re-run would destroy. Editor content and verdicts both live
+    // only in context until they are saved, so overwriting them is not undoable.
+    const hasWorkInProgress =
+        bddContent.trim().length > 0 || verificationResults.length > 0;
+
+    // Fetching a ticket resets BDD, verification results and the GitHub target
+    // (see runIngest), so it is only unprompted while there is nothing to lose.
+    const handleIngestTrigger = () => {
+        if (!ticketInput.trim()) {
+            setTicketInputError("Enter a ticket ID or URL.");
+            return;
+        }
+        setTicketInputError(null);
+
+        if (hasWorkInProgress) {
+            setPendingAction("ingest");
+            return;
+        }
+        void runIngest();
+    };
+
+    // Generating replaces the whole document, including hand-written edits.
+    const handleGenerateBDD = () => {
+        if (bddContent.trim().length > 0) {
+            setPendingAction("generate");
+            return;
+        }
+        runGenerateBDD();
+    };
+
+    // Same entry point as Home and Sessions: clear context and cached session
+    // data, then land on a throwaway session id that ingestion replaces with
+    // the real one.
+    // Local state is cleared alongside the context because this navigation
+    // stays on the same route, so the component is not guaranteed to remount
+    // and the stale-reset effect above does not fire (resetSession already
+    // nulls sessionId).
+    const handleStartNewSession = () => {
+        resetSession();
+        setTicketInput("");
+        setTicketInputError(null);
+        setPendingAction(null);
+        bddPopulatedForRef.current = null;
+        verificationPopulatedForRef.current = null;
+        queryClient.removeQueries({ queryKey: ["sessions"] });
+        router.push(`/session/${crypto.randomUUID()}`);
     };
 
     const displayedSessionId = sessionId || routeSessionId;
@@ -329,85 +479,99 @@ export default function SessionPipelinePage() {
     // up — render a minimal placeholder until context state matches the route.
     if (isContextStale) {
         return (
-            <div className="flex min-h-screen items-center justify-center bg-[linear-gradient(180deg,#eff6ff_0%,#f8fbff_26%,#f8fafc_100%)] text-slate-900">
-                <div className="flex items-center gap-3 text-sm text-slate-500">
-                    <span className="inline-block h-4 w-4 animate-spin rounded-full border-2 border-slate-300 border-t-sky-500" />
-                    Loading session…
-                </div>
+            <div className="flex min-h-screen items-center justify-center">
+                <InlineLoader>Loading session</InlineLoader>
             </div>
         );
     }
 
     return (
-        <div className="flex min-h-screen flex-col bg-[linear-gradient(180deg,#eff6ff_0%,#f8fbff_26%,#f8fafc_100%)] text-slate-900">
-            {/* Top bar */}
-            <header className="sticky top-0 z-20 border-b border-sky-100 bg-white/90 px-4 py-3 backdrop-blur lg:px-6">
-                <div className="mx-auto flex max-w-7xl items-center justify-between gap-4">
-                    <div>
-                        <p className="text-xs font-semibold uppercase tracking-[0.25em] text-sky-700">BDD Workspace</p>
-                        <h1 className="text-base font-bold tracking-tight text-slate-900 lg:text-lg">Jira to BDD demo</h1>
+        <div className="flex min-h-screen flex-col">
+            <AppNav
+                actions={
+                    <div className="flex items-center gap-2">
+                        {displayedSessionId && (
+                            <span className="hidden items-center gap-2 rounded-md border border-rule bg-surface px-2.5 py-1 font-mono text-xs text-muted-foreground lg:inline-flex">
+                                <span className="text-muted-foreground/70">session</span>
+                                <span className="text-foreground">
+                                    {displayedSessionId.slice(0, 8)}
+                                </span>
+                            </span>
+                        )}
+                        <Button size="sm" onClick={handleStartNewSession}>
+                            <Plus className="h-3.5 w-3.5" aria-hidden="true" />
+                            New session
+                        </Button>
                     </div>
-                    <div className="hidden rounded-xl bg-sky-50 px-3 py-1.5 text-xs text-slate-600 sm:block">
-                        Session: <span className="font-mono font-semibold text-slate-900">{displayedSessionId || "NEW"}</span>
-                    </div>
-                </div>
-            </header>
+                }
+            />
 
-            {/* Breadcrumb nav */}
-            <div className="border-b border-sky-50 bg-white/60 px-4 py-2 lg:px-6">
-                <div className="mx-auto max-w-7xl">
-                    <Link
-                        href="/"
-                        className="inline-flex items-center gap-1.5 text-xs font-medium text-slate-500 transition hover:text-sky-600"
-                    >
-                        <ArrowLeft className="h-3.5 w-3.5" />
-                        Back to Home
-                    </Link>
-                </div>
-            </div>
+            {/* Ingest bar — the entry point to everything below it, so it sits
+                directly under the nav and stays put while you scroll. */}
+            <div className="sticky top-14 z-20 border-b border-rule bg-background/85 backdrop-blur-md">
+                <div className="app-shell py-3">
+                    <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
+                        <div className="min-w-0 flex-1">
+                            <label htmlFor="ticket-input" className="sr-only">
+                                Jira ticket ID or URL
+                            </label>
+                            <Input
+                                id="ticket-input"
+                                mono
+                                placeholder="PROJ-1234 or a Jira URL"
+                                value={ticketInput}
+                                onChange={(e) => setTicketInput(e.target.value)}
+                                onKeyDown={(e) => {
+                                    if (e.key === "Enter" && !isIngesting) handleIngestTrigger();
+                                }}
+                                aria-invalid={ticketInputError ? true : undefined}
+                                aria-describedby={ticketInputError ? "ticket-input-error" : undefined}
+                                disabled={isIngesting}
+                            />
+                        </div>
 
-            {/* Ticket input bar */}
-            <div className="border-b border-sky-100 bg-white/80 px-4 py-3 backdrop-blur lg:px-6">
-                <div className="mx-auto max-w-7xl">
-                    <div className="flex flex-col gap-2 sm:flex-row sm:flex-wrap sm:items-center">
-                        <input
-                            type="text"
-                            placeholder="Enter Jira Ticket ID or URL..."
-                            value={ticketInput}
-                            onChange={(e) => setTicketInput(e.target.value)}
-                            className="min-w-0 flex-1 rounded-xl border border-sky-200 bg-sky-50 px-4 py-2.5 text-sm text-slate-900 shadow-sm outline-none transition focus:border-sky-500 focus:bg-white"
-                        />
                         <div className="flex gap-2">
-                            <button
+                            <Button
                                 onClick={handleIngestTrigger}
-                                className="flex-1 whitespace-nowrap rounded-xl bg-gradient-to-r from-blue-600 to-sky-500 px-4 py-2.5 text-sm font-semibold text-white shadow transition hover:from-blue-500 hover:to-sky-400 sm:flex-none sm:px-5"
+                                loading={isIngesting}
+                                variant="outline"
+                                className="flex-1 sm:flex-none"
                             >
-                                {isIngesting ? "Fetching..." : "Fetch Ticket"}
-                            </button>
-                            <button
+                                {isIngesting ? "Fetching" : "Fetch ticket"}
+                            </Button>
+                            <Button
                                 onClick={handleGenerateBDD}
                                 disabled={!canGenerateBDD}
-                                className="flex-1 whitespace-nowrap rounded-xl bg-gradient-to-r from-blue-700 to-indigo-600 px-4 py-2.5 text-sm font-semibold text-white shadow transition hover:from-blue-600 hover:to-indigo-500 disabled:cursor-not-allowed disabled:opacity-40 sm:flex-none sm:px-5"
+                                loading={isGeneratingBDD}
+                                className="flex-1 sm:flex-none"
                             >
-                                {isGeneratingBDD ? "Generating..." : "Generate BDD"}
-                            </button>
+                                {isGeneratingBDD ? "Generating" : "Generate BDD"}
+                            </Button>
                         </div>
+
                         {jiraTicketId && (
-                            <span className="rounded-xl bg-blue-50 px-3 py-2 text-xs text-blue-900">
-                                Ticket: <span className="font-semibold">{jiraTicketId}</span>
+                            <span className="inline-flex items-center gap-2 rounded-md border border-rule bg-surface px-2.5 py-1.5 font-mono text-xs">
+                                <span className="text-muted-foreground">ticket</span>
+                                <span className="font-semibold text-foreground">{jiraTicketId}</span>
                             </span>
                         )}
                     </div>
-                    {(ticketInputError || globalError) && (
-                        <p className="mt-2 rounded-xl bg-rose-50 px-4 py-2 text-sm text-rose-700">
-                            {ticketInputError || globalError}
+
+                    {/* Which model generates, and whether what it produces may
+                        train a future one — both belong to the capture. */}
+                    <div className="mt-2.5 flex flex-wrap items-start gap-x-6 gap-y-2">
+                        <FineTunedToggle />
+                        <TrainingOptInToggle />
+                    </div>
+
+                    {ticketInputError && (
+                        <p id="ticket-input-error" className="mt-2 text-xs text-fail-ink" role="alert">
+                            {ticketInputError}
                         </p>
                     )}
+
                     {isBDDLoading && sessionId !== routeSessionId && (
-                        <div className="mt-2 flex items-center gap-2 text-sm text-slate-500">
-                            <span className="inline-block h-3.5 w-3.5 animate-spin rounded-full border-2 border-slate-300 border-t-sky-500" />
-                            Loading saved BDD content…
-                        </div>
+                        <InlineLoader className="mt-2">Loading saved scenarios</InlineLoader>
                     )}
                 </div>
             </div>
@@ -415,34 +579,70 @@ export default function SessionPipelinePage() {
             {/* Main content — keyed on routeSessionId so all panels (Monaco
                 editor especially) fully remount when the session changes and
                 no internal component state can survive across sessions. */}
-            <div key={routeSessionId} className="flex-1 px-4 py-4 lg:px-6">
-                <div className="mx-auto flex max-w-7xl flex-col gap-4">
-                    {/* Editor + Status panel */}
-                    <div className="flex flex-col gap-4 lg:flex-row lg:items-start">
-                        {/* Status sidebar — auto height on mobile, full height on desktop */}
-                        <div className="shrink-0 lg:w-80 xl:w-96">
+            <main id="main" key={routeSessionId} className="app-shell flex-1 py-5">
+                <div className="flex flex-col gap-5">
+                    <div className="flex flex-col gap-5 lg:flex-row lg:items-start">
+                        <div className="shrink-0 lg:w-72 xl:w-80">
                             <TerminalProgressLog />
                         </div>
-                        {/* BDD Editor */}
-                        <div className="lg:flex-1">
+                        <div className="min-w-0 lg:flex-1">
                             <BDDEditorPanel />
                         </div>
                     </div>
 
-                    {/* GitHub Source Verification */}
+                    {/* RAG chat — available whenever a ticket exists for this session
+                        (set on ingestion and restored on revisit), so chat history
+                        shows when returning to a past session (AC3). */}
+                    {displayedSessionId && jiraTicketId && (
+                        <ChatPanel sessionId={displayedSessionId} />
+                    )}
+
                     {bddContent && (
                         <GitHubSourceSelector
                             onVerify={handleRunVerification}
                             isVerifying={isVerifying}
+                            onStop={stopVerification}
                         />
                     )}
 
-                    {/* Verification Results */}
                     {(verificationResults.length > 0 || verificationSummary !== null || isVerifying) && (
                         <VerificationResultsPanel />
                     )}
+
+                    {/* globalError also surfaces as a toast; this keeps it on
+                        screen for anyone who dismissed or missed that. */}
+                    {globalError && (
+                        <div
+                            className="gutter-rule rounded-lg border border-fail/30 bg-fail-soft/60 px-4 py-3"
+                            data-signal="fail"
+                            role="alert"
+                        >
+                            <p className="eyebrow text-fail-ink">Failed</p>
+                            <p className="mt-1 text-sm text-foreground">{globalError}</p>
+                        </div>
+                    )}
                 </div>
-            </div>
+            </main>
+
+            <ConfirmModal
+                open={pendingAction === "ingest"}
+                title="Fetch a ticket and clear this session?"
+                description="Fetching replaces the acceptance criteria and clears the scenarios, verification results and repository target currently on screen. Anything you have not saved is lost."
+                confirmLabel="Fetch ticket"
+                destructive
+                onConfirm={() => void runIngest()}
+                onCancel={() => setPendingAction(null)}
+            />
+
+            <ConfirmModal
+                open={pendingAction === "generate"}
+                title="Overwrite the current scenarios?"
+                description="Generating writes a fresh set of scenarios from the acceptance criteria, replacing everything in the editor — including your own edits."
+                confirmLabel="Generate"
+                destructive
+                onConfirm={runGenerateBDD}
+                onCancel={() => setPendingAction(null)}
+            />
         </div>
     );
 }

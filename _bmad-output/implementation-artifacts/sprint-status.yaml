@@ -1,9 +1,9 @@
 # generated: 2026-03-08
-# updated: 2026-04-05
+# updated: 2026-08-22
 # project: qe-agent-v2
 # project_key: NOKEY
 # tracking_system: file-system
-# story_location: d:\New folder\qe-agent-v2\_bmad-output\implementation-artifacts
+# story_location: e:\Projects\Python\qe-agent-v2\_bmad-output\implementation-artifacts
 
 # STATUS DEFINITIONS:
 # ==================
@@ -35,11 +35,11 @@
 # - Dev moves story to 'review', then runs code-review (fresh context, different LLM recommended)
 
 generated: 2026-03-08
-updated: 2026-04-05
+updated: 2026-08-22
 project: qe-agent-v2
 project_key: NOKEY
 tracking_system: file-system
-story_location: d:\New folder\qe-agent-v2\_bmad-output\implementation-artifacts
+story_location: e:\Projects\Python\qe-agent-v2\_bmad-output\implementation-artifacts
 
 development_status:
   epic-1: done
@@ -67,22 +67,201 @@ development_status:
   3-5-session-history-dashboard: done
   epic-3-retrospective: optional
 
-  epic-4: backlog  # Project Knowledge Base & RAG Enrichment
-  4-1-knowledge-base-service-and-confluence-integration: backlog
-  4-2-jira-workspace-knowledge-ingestion: backlog
-  4-3-rag-enriched-verification-integration: backlog
-  4-4-rag-context-display-panel: backlog
+  epic-4: done  # Project Knowledge Base & RAG Enrichment
+  4-1-knowledge-base-service-and-confluence-integration: done
+  4-2-jira-workspace-knowledge-ingestion: done
+  4-3-rag-enriched-verification-integration: done
+  4-4-rag-context-display-panel: done
+  4-5-knowledge-base-ingestion-ui: done  # added post-hoc: surfaces 4.1/4.2 ingestion in the UI
+  4-6-document-upload-knowledge-ingestion: done  # added post-hoc: PDF/DOCX upload source
+  4-7-delete-knowledge-sources: done  # added post-hoc: delete a source's row + Pinecone vectors
+  4-8-per-scenario-rag-and-verification-toggle: done  # added post-hoc: per-scenario KB retrieval + VERIFICATION_RAG_ENABLED
+  4-9-knowledge-base-opt-in-for-verification: done  # added post-hoc: agentic RAG + per-run use_knowledge_base checkbox (replaces env var)
   epic-4-retrospective: optional
 
-  epic-5: backlog  # Ticket Comprehension (RAG Q&A) & Traceability Reporting
-  5-1-rag-chat-api: backlog
-  5-2-rag-chat-ui: backlog
-  5-3-traceability-report-generation-api: backlog
-  5-4-pdf-and-csv-report-export: backlog
+  epic-5: done  # Ticket Comprehension (RAG Q&A) & Traceability Reporting
+  5-1-rag-chat-api: done
+  5-2-rag-chat-ui: done
+  5-3-traceability-report-generation-api: done
+  5-4-pdf-and-csv-report-export: done
+  5-5-project-knowledge-base-chat: done  # added post-hoc: general RAG chat over {user_id}:knowledge (Epic 4 KB)
   epic-5-retrospective: optional
 
-  epic-6: backlog  # Fine-Tuned Model Integration (Phase 2)
-  6-1-bdd-model-provider-abstraction: backlog
-  6-2-fine-tuned-model-integration: backlog
-  6-3-model-evaluation-pipeline: backlog
-  epic-6-retrospective: optional
+  epic-6: done  # Fine-Tuned Model Training & Integration (Phase 2) - 7 stories done 2026-08-13; 6.8/6.9 added post-hoc and done 2026-08-17 (retro-documented 2026-08-22)
+  # Listed in EXECUTION order, not numeric order: 6.4/6.6/6.7 precede 6.5, which
+  # precedes 6.2. create-story picks the first 'backlog' entry top-to-bottom, so
+  # do not re-sort this block into numeric order.
+  6-1-bdd-model-provider-abstraction: done  # rescoped: ACs already met by 4e0baea; story covered verification + gap-closure
+  6-4-training-data-capture: done  # migration b8c9d0e1f2a3 applied + verified 2026-08-08
+  6-6-training-data-opt-out-control: done  # migration c9d0e1f2a3b4 applied + verified 2026-08-08
+  6-7-manual-training-dataset-upload: done  # migration d0e1f2a3b4c5 applied + verified 2026-08-08; parser now shared with the builder
+  6-5-finetuning-dataset-and-training: done  # trained 2026-08-09 on Kaggle T4: eval loss 0.3976, adapter at training/outputs/outputs/bdd-lora/. Code review fixed 3 High + 5 Medium; end-to-end serving verification moved to 6.2 per sprint-change-proposal-2026-08-09
+  6-2-fine-tuned-model-integration: done  # served end-to-end 2026-08-09: effective=fine_tuned, template match, 45.0s vs the 12s budget (88%/12% CPU/GPU). Serving DECIDED as local-only for research — general_llm stays the production default. `bdd-lora` is in Ollama and ready for 6.3, which MUST read serve/README.md's quantization-exposure note before interpreting any score
+  6-3-model-evaluation-pipeline: done  # RESULT (all 28 items, 56 rows, 0 degraded): a SPLIT. Fine-tune WINS reference alignment off-domain 0.488 vs 0.176 (only metric grounded in human-authored Gherkin) but loses on-domain coverage 0.867 vs 1.000, duplicates ~3x more, and is ~20x slower. Fine-tuning worked; it learned the wrong corpus. Serving decision unchanged (local-only). Remedy sharpened: product-domain Gherkin, not more Gherkin. Originally: # not blocked on serving — `bdd-lora` is in Ollama, no conversion needed. BUT the epic's "20+ real Jira tickets" Given is unsatisfied (0 captured AC pairs, 5 tickets ever ingested), so AC1 is an evaluation-set acquisition gate; "human-edit %" is not measurable and is reported as such
+  # ── Added post-hoc. Both were implemented OUTSIDE the BMAD workflow (2026-08-16/17)
+  # and their story files were written retrospectively on 2026-08-22 from RUN_LOG.md,
+  # the shipped code and the commit history. Their ACs are a reconstruction of what the
+  # work had to satisfy, not criteria agreed before implementation — each file says so.
+  6-8-product-domain-training-corpus: done  # 28 hand-authored product-domain pairs (no LLM on either side of the pair) merged into dataset v2 (226 pairs). Run 4 (2026-08-16) reproduced Run 3 to give the loss a noise floor and moved holdout scoring onto the GPU; Run 5 (2026-08-17) trained on v2. THE RESULT IS IN THE DOMAIN SPLIT, NOT THE AGGREGATE: duplicate rate 0.111 on the 3 product-domain holdout items vs 0.407 on the 17 legacy ones — 3.7x lower repetition on the domain the new data covers, and the first direct evidence that corpus DOMAIN drives repetition rather than model capacity or dataset size. Coverage slipped 1.000 -> 0.980 (RG-002, 3 of 5 criteria). Three items is a signal, not a result; making it a result needs more product pairs AND a holdout that is not 85% off-domain
+  6-9-model-comparison-ui-and-saved-runs: done  # 5 evaluation routes over Story 6.3's existing runner/metrics/results table (compare, batch runs, run list, per-run or pooled report, user-scoped delete) + /comparison page with ModelComparisonPanel and SavedRunsPanel. The route reimplements no scoring — it imports generate_one/score_row/coverage/duplicate_rate/summarise_group, so the API and the batch CLI cannot drift into measuring different things. effective_provider/fallback_reason are surfaced in the UI; degraded rows excluded from averages and counted separately. FINE_TUNED_ALLOW_FALLBACK added, with the comparison route passing allow_fallback=False explicitly so no config change can re-enable a silent fallback under a measuring caller. +19 backend tests
+
+  epic-6-retrospective: optional  # declined 2026-08-13
+
+# ── Documentation drift, resolved 2026-08-22 ─────────────────────────────────
+# Everything from 2026-08-15 onward (Runs 3/4/5, the product-domain corpus, the
+# evaluation API and UI) was built without BMAD, and _bmad-output/ was not touched
+# in any commit between 2026-08-13 and 2026-08-22. Two entries above were STALE
+# rather than merely missing, and are corrected here:
+#
+#   * 6-3's note reports the RUN 2 evaluation (reference alignment 0.488 vs 0.176).
+#     docs/evaluation-report.md has since been rewritten for `run-3-1.5b`, where the
+#     off-domain figures are 0.317 vs 0.240 and on-domain coverage is 1.000 for BOTH
+#     providers. The 6-3 note is kept as written because it is the record of what was
+#     true on 2026-08-13; read docs/evaluation-report.md for the current numbers.
+#   * docs/evaluation-report.md still ends with "Conclusion: _Pending._" — the run-3
+#     re-evaluation was never written up to a conclusion. That is an OPEN item, not a
+#     documentation gap, and it is the last thing Epic 6 owes.
+
+# ── Maintenance pass, 2026-08-22 (same day, after the drift note above) ──────
+# A cross-cutting hardening pass was implemented outside the story workflow and
+# is recorded in maintenance-2026-08-22-verification-and-rag-hardening.md.
+# Highlights: legacy two-step verification (/fetch + /run) REMOVED (stories 2-2
+# and 2-3 are now historical); agentic verification pins PR-mode to the PR head
+# SHA and exact-files mode to the listed files; sessions list paginated and
+# bdd_status gained "edited"; sessions.jira_ticket_url added (migration
+# f6b7c8d9e0a1, applied); embeddings no longer fall back to random vectors;
+# RAG prompts ground in full chunk text; document re-uploads dedupe by
+# filename; retrieval is hybrid-lite (identifier re-rank + named-ticket pull).
+# Affected story files carry "Amended 2026-08-22" banners pointing at the record.
+
+# ── Frontend redesign, 2026-08-22 (same day, after the maintenance pass) ─────
+# The UI was rebuilt on a new visual system, recorded in
+# maintenance-2026-08-22-ui-redesign-feature-file.md. Direction: "feature file" —
+# the UI borrows the vocabulary of the artifact the product makes (monospace
+# headings, a keyword gutter, pass/fail as the palette rather than a brand hue).
+# Highlights: globals.css rewritten around semantic oklch tokens with a COMPLETE
+# dark palette that is now actually reachable (ThemeProvider + ThemeToggle, theme
+# painted pre-hydration); an in-house toast system (no new dependency, portalled
+# to <body>) wired into ingest, generate, verify, save/upload/export, knowledge
+# ingest/delete, training upload/delete and comparison runs; a loader family
+# (RunSpinner / Spinner / Skeleton* / ProgressBar) replacing hand-rolled spinners;
+# shared AppNav/PageHeader replacing per-page chrome that had drifted apart;
+# TerminalProgressLog now renders real pipeline stages AND the live SSE log tail
+# it had been ignoring since Story 1.5.
+#
+# Inline banners were KEPT alongside toasts wherever the message belongs to a form
+# or must survive a reload (auth errors, globalError, per-file rejections) — the
+# toasts are additive, not a replacement.
+#
+# Docs updated with it: ux-design-specification.md (visual/direction/component/
+# consistency/accessibility sections rewritten), ux-design-directions.html
+# (banner: superseded), architecture.md (frontend structure + styling contract).
+# Affected story files carry "Amended 2026-08-22" banners pointing at the record:
+# 1-5, 2-4, 3-1, 4-5, 6-7. Every Tailwind colour utility quoted in an artifact
+# predating this date is stale; globals.css is the source of truth.
+#
+# Test status: green — 153 passed / 2 skipped, tsc and ESLint clean. Two tests
+# were failing while this pass was in flight (auth.test.ts signUp, and
+# BDDEditorPanel "renders the editor panel and control buttons"); both were
+# already failing on the parent commit and have since been fixed by concurrent
+# same-day work, not by the redesign.
+
+# ── Verification source persistence, 2026-08-22 ─────────────────────────────
+# verification_results gained verification_mode + github_input (both nullable),
+# recorded in maintenance-2026-08-22-verification-source-persistence.md. A run's
+# source (repo URL / PR URL / list of file URLs) is now stored per RESULT ROW —
+# not per session, because results accumulate and one session can hold several
+# runs against different sources. A revisited session shows a "Verified against"
+# block and restores the source field, so re-running does not mean retyping the
+# URL. Story banners: 2-4, 2-5, 3-3.
+#
+# Migration a1b2c3d4e5f6 APPLIED 2026-08-22 (f6b7c8d9e0a1 -> a1b2c3d4e5f6, now
+# head); both columns verified present and nullable via information_schema.
+# Rows predating it are not backfilled and report null, so older sessions show
+# no source block — intended, the information is unrecoverable for those runs.
+
+# ── Delete all knowledge sources, 2026-08-22 ────────────────────────────────
+# Bulk DELETE /api/v1/knowledge/sources (no id) -> {deleted: N}, surfaced as a
+# "Delete all" button in the Ingested sources header behind its own confirm.
+# Recorded in maintenance-2026-08-22-delete-all-knowledge-sources.md.
+# Deliberately NOT a loop over the per-source delete: it wipes the user's whole
+# Pinecone namespace in one call, which also clears vectors the per-source path
+# can never target (legacy rows with no source_ref, orphans from failed
+# deletions) — so it doubles as a repair for a knowledge base that still answers
+# RAG from vectors nothing could remove. No schema change. Story banner: 4-7.
+
+# ── Ingest Confluence / Jira by URL, 2026-08-22 ─────────────────────────────
+# Both ingestion forms gained a method selector (tablist, matching
+# GitHubSourceSelector) and a URL path, recorded in
+# maintenance-2026-08-22-ingest-by-url.md. Confluence: "Whole space" (default)
+# or "Page URLs" (page URLs and/or bare ids). Jira: "Whole project" (default)
+# or "Ticket URLs" (issue URLs and/or bare keys). Previously you could only take
+# an entire space or an entire project.
+#
+# Only the FETCH step changed: fetch_page_by_id / fetch_ticket_content return the
+# same types as the bulk fetchers, so chunking, embedding, SSE progress and
+# persistence stay shared. New confluence_service.extract_page_id(); Jira needed
+# no new parsing (fetch_ticket_content already took a URL or a key). Both paths
+# dedupe before embedding. JiraIngestRequest.project_key is now optional, guarded
+# by a model validator so a body with neither source is still a 422.
+# No schema change. Story banners: 4-1, 4-2, 4-5.
+
+# ── Runtime model selection, 2026-08-23 ────────────────────────────────────
+# Provider and model became per-request rather than per-process: every LLM
+# request carries llm_provider/llm_model, and get_llm_provider() takes them as
+# arguments with LLM_PROVIDER/LLM_MODEL as the fallback for callers that have no
+# request behind them. Keys split per vendor (OPENAI_API_KEY/ANTHROPIC_API_KEY);
+# LLM_API_KEY still serves whichever provider LLM_PROVIDER names and is never a
+# fallback for another — handing an OpenAI key to Anthropic passed the
+# "is a key set" guard and failed later as a 401 that read like a broken account.
+#
+# ClaudeProvider.generate_with_tools was NOT implemented, and the agentic runner
+# catches per-scenario LLM errors then emits `complete` regardless — so choosing
+# Claude produced a run that finished, toasted success, and verified nothing. It
+# is implemented now, and LLMProvider.supports_tools lets verification refuse a
+# tool-less provider with a 400 up front. No schema change.
+# Recorded in maintenance-2026-08-23-runtime-model-selection.md.
+# Story banners: 1-3, 2-5, 5-1, 5-5.
+
+# ── Closing the training-data loop, 2026-08-23 ─────────────────────────────
+# Epic 6 shipped capture, consent, dataset build and fine-tuning, but no session
+# data had ever trained a model — run-5's 204 examples came entirely from the
+# static corpus. Three independent defects, each sufficient alone:
+#   1. scenariosToGherkin() emitted steps with no Given/When/Then keywords, so
+#      every edited/uploaded row was dropped as "incomplete steps". Fixed
+#      forward only; rows written before this stay unparsable.
+#   2. --db-source had no `edited`, so the highest-value rows were reachable
+#      only via `all` (which drags in self-distillation). Added `edited` and
+#      `authored`; default unchanged.
+#   3. The builder ignored bdd_files.acceptance_criteria and back-generated a
+#      replacement — paying an LLM to invent worse input than the real ticket
+#      text already stored. Stored pairs now skip back-generation entirely.
+#
+# TRAINING_DATA_OPT_IN became the deployment POLICY, ANDed with a per-request
+# consent flag so a client can only narrow it. Also closed an embeddings
+# regression from the key split, and added a suite-wide network block after a
+# test was caught making real OpenAI calls. No schema change.
+# Recorded in maintenance-2026-08-23-training-data-loop.md.
+# Story banners: 6-4, 6-5, 6-6.
+
+# ── Projects and credential scoping, 2026-08-23 ────────────────────────────
+# Sessions became project-scoped. `projects` holds per-project Jira / Confluence
+# / GitHub settings plus a default model; credentials are Fernet-ENCRYPTED (not
+# hashed — they are replayed to their APIs, so the plaintext must be
+# recoverable) under CREDENTIAL_ENCRYPTION_KEY held outside the DB, and are
+# never serialized back (has_*_token booleans only).
+#
+# Resolution is all-or-nothing per integration: a project supplies its whole
+# credential set or none of it, so a project base URL is never paired with an
+# environment token. LLM API keys stay system config — they are billing
+# credentials for the deployment — while the provider/model CHOICE is a project
+# default the UI prepopulates from and the user can override.
+#
+# Knowledge moved to one namespace per project. Migrations 8c4760c0942a and
+# fc81d4a9e05c (head), both applied 2026-08-23: 37 sessions and 20 knowledge
+# sources moved into Project-1; 9 vectors COPIED (not moved) by
+# scripts/migrate_knowledge_vectors.py, source namespace left intact.
+# First frontend use of Zustand (active project id only; server data stays in
+# React Query).
+# Recorded in maintenance-2026-08-23-projects-and-credential-scoping.md.
+# Story banners: 3-3, 3-5, 4-1, 4-2, 4-5, 4-6, 4-7, 5-5.

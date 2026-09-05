@@ -1,38 +1,24 @@
-"""Tests for the GitHub verification service and API endpoint."""
+"""Tests for the GitHub code-fetching service (agentic verification evidence)."""
 
 import base64
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
-from fastapi.testclient import TestClient
 
-from app.core.auth import get_current_user
-from app.main import app
 from app.services.github_service import (
     GitHubServiceError,
     _parse_github_blob_url,
     _parse_pr_url,
     _parse_repo_url,
-    fetch_exact_files,
-    fetch_full_repo,
+    fetch_exact_files_resolved,
     fetch_pull_request,
-    fetch_github_code,
 )
 
 
-async def _mock_auth() -> str:
-    return "test-user-id"
-
-
-# ---------------------------------------------------------------------------
-# Fixtures
-# ---------------------------------------------------------------------------
-
-@pytest.fixture
-def client() -> TestClient:
-    app.dependency_overrides[get_current_user] = _mock_auth
-    yield TestClient(app)
-    app.dependency_overrides.clear()
+async def fetch_exact_files(paths_input: str, pat: str):
+    """Files-only view of fetch_exact_files_resolved, for concise assertions."""
+    files, _ = await fetch_exact_files_resolved(paths_input, pat)
+    return files
 
 
 def _encoded(text: str) -> str:
@@ -219,115 +205,6 @@ class TestFetchExactFiles:
 
 
 # ---------------------------------------------------------------------------
-# fetch_full_repo tests
-# ---------------------------------------------------------------------------
-
-class TestFetchFullRepo:
-    @pytest.mark.asyncio
-    async def test_happy_path_returns_text_files(self) -> None:
-        tree_resp = _mock_response(200, {
-            "tree": [
-                {"path": "src/main.py", "type": "blob", "size": 100},
-                {"path": "src/utils.py", "type": "blob", "size": 200},
-                {"path": "image.png", "type": "blob", "size": 50},   # binary — skipped
-                {"path": "src/", "type": "tree", "size": 0},         # tree — skipped
-            ],
-            "truncated": False,
-        })
-        file_content_resp = _mock_response(200, {
-            "content": _encoded("print('hello')"),
-            "encoding": "base64",
-        })
-
-        call_count = 0
-
-        async def mock_get(url, headers, timeout=30.0):
-            nonlocal call_count
-            call_count += 1
-            if "git/trees" in url:
-                return tree_resp
-            return file_content_resp
-
-        cm = _make_async_client(mock_get)
-
-        with patch("app.services.github_service.httpx.AsyncClient", return_value=cm):
-            result = await fetch_full_repo("https://github.com/org/repo", pat="test-pat")
-
-        # Only 2 text blobs (png and tree entry skipped)
-        assert len(result) == 2
-        assert all(f.content == "print('hello')" for f in result)
-
-    @pytest.mark.asyncio
-    async def test_binary_extensions_filtered_out(self) -> None:
-        tree_resp = _mock_response(200, {
-            "tree": [
-                {"path": "logo.png", "type": "blob", "size": 100},
-                {"path": "font.woff2", "type": "blob", "size": 100},
-                {"path": "package-lock.json.lock", "type": "blob", "size": 100},
-            ],
-            "truncated": False,
-        })
-
-        async def mock_get(url, headers, timeout=30.0):
-            return tree_resp
-
-        cm = _make_async_client(mock_get)
-
-        with patch("app.services.github_service.httpx.AsyncClient", return_value=cm):
-            with pytest.raises(GitHubServiceError, match="No qualifying text files"):
-                await fetch_full_repo("https://github.com/org/repo", pat="test-pat")
-
-    @pytest.mark.asyncio
-    async def test_invalid_repo_url_raises(self) -> None:
-        with pytest.raises(GitHubServiceError, match="Invalid GitHub repository URL"):
-            await fetch_full_repo("https://github.com/org", pat="test-pat")
-
-    @pytest.mark.asyncio
-    async def test_missing_pat_raises(self) -> None:
-        with pytest.raises(GitHubServiceError, match="PAT not configured"):
-            await fetch_full_repo("https://github.com/org/repo", pat="")
-
-    @pytest.mark.asyncio
-    async def test_truncated_tree_prepends_warning(self) -> None:
-        tree_resp = _mock_response(200, {
-            "tree": [
-                {"path": "src/main.py", "type": "blob", "size": 100},
-            ],
-            "truncated": True,  # GitHub signals more files exist beyond the limit
-        })
-        file_content_resp = _mock_response(200, {
-            "content": _encoded("print('hello')"),
-            "encoding": "base64",
-        })
-
-        async def mock_get(url, headers, timeout=30.0):
-            if "git/trees" in url:
-                return tree_resp
-            return file_content_resp
-
-        cm = _make_async_client(mock_get)
-
-        with patch("app.services.github_service.httpx.AsyncClient", return_value=cm):
-            result = await fetch_full_repo("https://github.com/org/repo", pat="test-pat")
-
-        # Warning entry is prepended; actual file follows
-        assert len(result) == 2
-        assert result[0].path.startswith("[WARNING]")
-        assert "truncated" in result[0].path.lower()
-        assert result[1].path == "src/main.py"
-
-    @pytest.mark.asyncio
-    async def test_repo_404_raises(self) -> None:
-        tree_resp = _mock_response(404, {"message": "Not Found"})
-        mock_get = AsyncMock(return_value=tree_resp)
-        cm = _make_async_client(mock_get)
-
-        with patch("app.services.github_service.httpx.AsyncClient", return_value=cm):
-            with pytest.raises(GitHubServiceError, match="not found"):
-                await fetch_full_repo("https://github.com/org/missing-repo", pat="test-pat")
-
-
-# ---------------------------------------------------------------------------
 # fetch_pull_request tests
 # ---------------------------------------------------------------------------
 
@@ -340,8 +217,9 @@ class TestFetchPullRequest:
             {"filename": "old.py", "status": "removed", "patch": None},     # removed — skipped
             {"filename": "logo.png", "status": "modified", "patch": None},  # binary — skipped
         ]
+        meta_resp = _mock_response(200, {"head": {"sha": "abc123def"}})
         pr_resp = _mock_response(200, pr_files)
-        mock_get = AsyncMock(return_value=pr_resp)
+        mock_get = AsyncMock(side_effect=[meta_resp, pr_resp])
         cm = _make_async_client(mock_get)
 
         with patch("app.services.github_service.httpx.AsyncClient", return_value=cm):
@@ -354,6 +232,9 @@ class TestFetchPullRequest:
         assert "src/auth.py" in paths
         assert "src/utils.py" in paths
         assert "old.py" not in paths
+        # Evidence links point at the PR head commit — blob/HEAD would 404 for
+        # files that only exist on the PR branch.
+        assert all("/blob/abc123def/" in f.github_url for f in result)
 
     @pytest.mark.asyncio
     async def test_invalid_pr_url_raises(self) -> None:
@@ -385,20 +266,22 @@ class TestFetchPullRequest:
         pr_files = [
             {"filename": "src/auth.py", "status": "modified", "patch": "@@ -1 +1 @@\n+def new(): pass"},
         ]
+        meta_resp = _mock_response(200, {"head": {"sha": "abc123def"}})
         pr_resp = _mock_response(200, pr_files)
         captured_urls: list[str] = []
 
         async def mock_get(url, headers, timeout=30.0):
             captured_urls.append(url)
-            return pr_resp
+            return meta_resp if url.endswith("/pulls/42") else pr_resp
 
         cm = _make_async_client(mock_get)
 
         with patch("app.services.github_service.httpx.AsyncClient", return_value=cm):
             await fetch_pull_request("https://github.com/org/repo/pull/42", pat="test-pat")
 
-        assert len(captured_urls) == 1
-        assert "per_page=100" in captured_urls[0]
+        # First call fetches PR metadata (head sha); second lists the files.
+        assert len(captured_urls) == 2
+        assert "per_page=100" in captured_urls[1]
 
     @pytest.mark.asyncio
     async def test_pr_not_found_raises(self) -> None:
@@ -415,8 +298,9 @@ class TestFetchPullRequest:
     @pytest.mark.asyncio
     async def test_all_files_removed_raises(self) -> None:
         pr_files = [{"filename": "old.py", "status": "removed", "patch": None}]
+        meta_resp = _mock_response(200, {"head": {"sha": "abc123def"}})
         pr_resp = _mock_response(200, pr_files)
-        mock_get = AsyncMock(return_value=pr_resp)
+        mock_get = AsyncMock(side_effect=[meta_resp, pr_resp])
         cm = _make_async_client(mock_get)
 
         with patch("app.services.github_service.httpx.AsyncClient", return_value=cm):
@@ -424,6 +308,108 @@ class TestFetchPullRequest:
                 await fetch_pull_request(
                     "https://github.com/org/repo/pull/7", pat="test-pat"
                 )
+
+
+# ---------------------------------------------------------------------------
+# Limitation fixes: slashed branch refs, full-repo selection, PR pagination
+# ---------------------------------------------------------------------------
+
+class TestSlashedBranchRefs:
+    @pytest.mark.asyncio
+    async def test_slashed_branch_ref_is_resolved_and_retried(self) -> None:
+        """blob/feature/my-branch/src/auth.py: the first-segment split 404s,
+        matching-refs resolves the real branch, and the retry succeeds."""
+        content_resp = _mock_response(200, {
+            "content": _encoded("def login(): pass"),
+            "encoding": "base64",
+        })
+        matching_refs_resp = _mock_response(200, [
+            {"ref": "refs/heads/feature"},            # decoy: shorter prefix
+            {"ref": "refs/heads/feature/my-branch"},  # the real branch
+        ])
+        captured_urls: list[str] = []
+
+        async def mock_get(url, headers, timeout=30.0):
+            captured_urls.append(url)
+            if "matching-refs" in url:
+                return matching_refs_resp
+            # First contents attempt uses the mis-split ref → 404
+            if "ref=feature&" in url or url.endswith("ref=feature"):
+                return _mock_response(404, {"message": "Not Found"})
+            return content_resp
+
+        cm = _make_async_client(mock_get)
+
+        with patch("app.services.github_service.httpx.AsyncClient", return_value=cm):
+            from app.services.github_service import fetch_exact_files_resolved
+            files, first_ref = await fetch_exact_files_resolved(
+                "https://github.com/org/repo/blob/feature/my-branch/src/auth.py",
+                pat="test-pat",
+            )
+
+        assert first_ref == "feature/my-branch"
+        assert len(files) == 1
+        assert files[0].path == "src/auth.py"
+        assert files[0].github_url == (
+            "https://github.com/org/repo/blob/feature/my-branch/src/auth.py"
+        )
+        # The retry asked for the URL-encoded resolved ref
+        assert any("ref=feature%2Fmy-branch" in u for u in captured_urls)
+
+    @pytest.mark.asyncio
+    async def test_unresolvable_slashed_ref_still_404s_clearly(self) -> None:
+        """When matching-refs has no multi-segment branch, the original
+        file-not-found error stands."""
+        matching_refs_resp = _mock_response(200, [{"ref": "refs/heads/main"}])
+
+        async def mock_get(url, headers, timeout=30.0):
+            if "matching-refs" in url:
+                return matching_refs_resp
+            return _mock_response(404, {"message": "Not Found"})
+
+        cm = _make_async_client(mock_get)
+
+        with patch("app.services.github_service.httpx.AsyncClient", return_value=cm):
+            with pytest.raises(GitHubServiceError, match="File not found"):
+                await fetch_exact_files(
+                    "https://github.com/org/repo/blob/missing/src/auth.py",
+                    pat="test-pat",
+                )
+
+
+class TestPullRequestPagination:
+    @pytest.mark.asyncio
+    async def test_pr_with_more_than_100_files_is_fully_paged(self) -> None:
+        meta_resp = _mock_response(200, {"head": {"sha": "abc123"}})
+        page1 = [
+            {"filename": f"src/f{i}.py", "status": "modified", "patch": "@@ -1 +1 @@"}
+            for i in range(100)
+        ]
+        page2 = [
+            {"filename": f"src/g{i}.py", "status": "modified", "patch": "@@ -1 +1 @@"}
+            for i in range(30)
+        ]
+        captured_urls: list[str] = []
+
+        async def mock_get(url, headers, timeout=30.0):
+            captured_urls.append(url)
+            if url.endswith("/pulls/42"):
+                return meta_resp
+            if url.endswith("&page=1"):
+                return _mock_response(200, page1)
+            return _mock_response(200, page2)
+
+        cm = _make_async_client(mock_get)
+
+        with patch("app.services.github_service.httpx.AsyncClient", return_value=cm):
+            result = await fetch_pull_request(
+                "https://github.com/org/repo/pull/42", pat="test-pat"
+            )
+
+        assert len(result) == 130
+        assert any(u.endswith("&page=2") for u in captured_urls)
+        # A short page ends the loop — no page=3 request
+        assert not any(u.endswith("&page=3") for u in captured_urls)
 
 
 # ---------------------------------------------------------------------------
@@ -471,86 +457,3 @@ class TestRetryBackoff:
                         "https://github.com/org/repo/blob/main/src/auth.py",
                         pat="test-pat",
                     )
-
-
-# ---------------------------------------------------------------------------
-# fetch_github_code dispatch tests
-# ---------------------------------------------------------------------------
-
-class TestFetchGithubCodeDispatch:
-    @pytest.mark.asyncio
-    async def test_unknown_mode_raises(self) -> None:
-        with pytest.raises(GitHubServiceError, match="Unknown verification mode"):
-            await fetch_github_code("invalid_mode", "some-input", "test-pat")
-
-
-# ---------------------------------------------------------------------------
-# API endpoint tests
-# ---------------------------------------------------------------------------
-
-class TestVerificationEndpoint:
-    def test_fetch_endpoint_calls_service_and_returns_response(self, client: TestClient) -> None:
-        from app.schemas.verification import FetchedFile
-
-        with patch(
-            "app.api.v1.verification.fetch_github_code",
-            new_callable=AsyncMock,
-        ) as mock_fetch:
-            mock_fetch.return_value = [
-                FetchedFile(path="src/auth.py", content="def login(): pass")
-            ]
-
-            response = client.post(
-                "/api/v1/verification/fetch",
-                json={
-                    "session_id": "session-abc",
-                    "mode": "exact_files",
-                    "github_input": "https://github.com/org/repo/blob/main/src/auth.py",
-                },
-            )
-
-        assert response.status_code == 200
-        data = response.json()
-        assert data["session_id"] == "session-abc"
-        assert data["mode"] == "exact_files"
-        assert len(data["fetched_files"]) == 1
-        assert data["fetched_files"][0]["path"] == "src/auth.py"
-
-    def test_fetch_endpoint_returns_422_on_service_error(self, client: TestClient) -> None:
-        with patch(
-            "app.api.v1.verification.fetch_github_code",
-            new_callable=AsyncMock,
-            side_effect=GitHubServiceError("File not found", code="GITHUB_FETCH_FAILED"),
-        ):
-            response = client.post(
-                "/api/v1/verification/fetch",
-                json={
-                    "session_id": "session-abc",
-                    "mode": "exact_files",
-                    "github_input": "https://github.com/org/repo/blob/main/missing.py",
-                },
-            )
-
-        assert response.status_code == 422
-        body = response.json()
-        # Architecture error envelope: {"error": "...", "message": "...", "code": 422}
-        assert body["error"] == "GITHUB_FETCH_FAILED"
-        assert "File not found" in body["message"]
-        assert body["code"] == 422
-
-    def test_fetch_endpoint_invalid_mode_422(self, client: TestClient) -> None:
-        response = client.post(
-            "/api/v1/verification/fetch",
-            json={
-                "session_id": "session-abc",
-                "mode": "invalid_mode",
-                "github_input": "something",
-            },
-        )
-        assert response.status_code == 422
-        body = response.json()
-        # Pydantic validation errors go through main.py's RequestValidationError
-        # handler, which returns the architecture envelope with VALIDATION_ERROR.
-        assert body["error"] == "VALIDATION_ERROR"
-        assert body["code"] == 422
-        assert "message" in body

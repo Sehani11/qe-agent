@@ -1,6 +1,13 @@
 # Story 2.5: Agentic Verification with GitHub Tools
 
+> **Amended 2026-08-23** ([maintenance record](maintenance-2026-08-23-runtime-model-selection.md)): Verification now resolves its provider through `llm_with_tools_for()`, which returns **400** for a provider whose `supports_tools` is False. Previously a tool-less provider produced a run that emitted a per-scenario error for every scenario and still finished with `complete` — a verification that verified nothing. `ClaudeProvider.generate_with_tools` is now implemented, so Claude is a valid choice here. The GitHub PAT comes from the active project when it has one (see the [projects record](maintenance-2026-08-23-projects-and-credential-scoping.md)).
+
+
 Status: done
+
+> **Amended 2026-08-22** ([maintenance record](maintenance-2026-08-22-verification-and-rag-hardening.md)): Mode semantics were tightened: exact-files injects the listed files as prompt evidence and pins tools to the URL's resolved ref; pull-request injects the PR diffs and pins tools to the PR head SHA (previously the PR number was discarded and verdicts judged the default branch). A `pass` now requires evidence (a successful tool read or injected code), and verdict scenario identity is pinned server-side, never trusted from the model.
+
+> **Amended 2026-08-22** ([maintenance record](maintenance-2026-08-22-verification-source-persistence.md)): Each persisted verdict now also records the run's `verification_mode` and `github_input`, so a stored result says what it was checked against. Note this is the run's scope, NOT the per-scenario `github_links` the model cites as evidence — a run that found nothing has links but still has a source.
 
 ## Story
 

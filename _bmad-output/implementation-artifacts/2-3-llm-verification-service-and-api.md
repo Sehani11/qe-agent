@@ -2,6 +2,8 @@
 
 Status: done
 
+> **Amended 2026-08-22** ([maintenance record](maintenance-2026-08-22-verification-and-rag-hardening.md)): The `/verification/run` endpoint and `run_verification` runner this story built were REMOVED with the legacy two-step flow. `verification_service` now holds only the shared substrate (Gherkin parsing, relevance selection, RAG formatting, verdict wire shape, row builder) consumed by the agentic path. Read this story as history, not as the current API surface.
+
 <!-- Note: Validation is optional. Run validate-create-story for quality check before dev-story. -->
 
 ## Story

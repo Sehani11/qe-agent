@@ -1,6 +1,13 @@
 # Story 3.3: Session Persistence & Database Schema
 
+> **Amended 2026-08-23** ([maintenance record](maintenance-2026-08-23-projects-and-credential-scoping.md)): `sessions.project_id` was added (NOT NULL) and every existing session was migrated into a per-user `Project-1`. Session creation resolves a project via `ensure_project()`; there is no path that writes a session without one.
+
+
 Status: done
+
+> **Amended 2026-08-22** ([maintenance record](maintenance-2026-08-22-verification-and-rag-hardening.md)): The `sessions` table gained `jira_ticket_url` (nullable, migration `f6b7c8d9e0a1`) — the reference the user submitted at ingestion, used to restore the ticket field on revisit.
+
+> **Amended 2026-08-22** ([maintenance record](maintenance-2026-08-22-verification-source-persistence.md)): `verification_results` gained `verification_mode` (String(20)) and `github_input` (Text), both nullable, migration `a1b2c3d4e5f6` (NOT yet applied). Stored per row rather than per session because results accumulate — one session can hold several runs against different sources.
 
 <!-- Note: Validation is optional. Run validate-create-story for quality check before dev-story. -->
 

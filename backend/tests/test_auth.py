@@ -94,11 +94,16 @@ def test_bdd_without_token_returns_401(client):
     assert payload["code"] == 401
 
 
-def test_verification_fetch_without_token_returns_401(client):
-    """POST /verification/fetch without Authorization → 401 UNAUTHORIZED envelope."""
+def test_verification_run_agentic_without_token_returns_401(client):
+    """POST /verification/run-agentic without Authorization -> 401 UNAUTHORIZED envelope (AC5)."""
     response = client.post(
-        "/api/v1/verification/fetch",
-        json={"session_id": "abc", "mode": "exact_files", "github_input": "https://github.com/x/y/blob/main/f.py"},
+        "/api/v1/verification/run-agentic",
+        json={
+            "session_id": "abc",
+            "bdd_content": "Scenario: x\n  Given y",
+            "mode": "full_repo",
+            "github_input": "https://github.com/org/repo",
+        },
     )
     assert response.status_code == 401
     payload = response.json()
@@ -107,17 +112,6 @@ def test_verification_fetch_without_token_returns_401(client):
     assert payload["code"] == 401
 
 
-def test_verification_run_without_token_returns_401(client):
-    """POST /verification/run without Authorization → 401 UNAUTHORIZED envelope (AC5)."""
-    response = client.post(
-        "/api/v1/verification/run",
-        json={"session_id": "abc", "bdd_content": "Scenario: x\n  Given y", "fetched_files": []},
-    )
-    assert response.status_code == 401
-    payload = response.json()
-    assert payload["error"] == "UNAUTHORIZED"
-    assert payload["message"] == "Authentication required."
-    assert payload["code"] == 401
 
 
 # ---------------------------------------------------------------------------

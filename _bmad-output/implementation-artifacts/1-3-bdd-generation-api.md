@@ -1,5 +1,8 @@
 # Story 1.3: bdd-generation-api
 
+> **Amended 2026-08-23** ([maintenance record](maintenance-2026-08-23-runtime-model-selection.md)): `/bdd/generate` now accepts `llm_provider` / `llm_model` / `bdd_model_provider` per request, so the model is chosen in the UI rather than by `LLM_PROVIDER` / `BDD_MODEL_PROVIDER` alone (those remain the fallback). `BDDGenerateRequest` declares the two LLM fields inline instead of inheriting `LLMSelectionMixin`, because `app/schemas/bdd.py` is loaded by file path by the training serving shim and may not import sibling schema modules.
+
+
 Status: done
 
 <!-- Note: Validation is optional. Run validate-create-story for quality check before dev-story. -->

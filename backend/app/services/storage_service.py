@@ -11,6 +11,7 @@ holds everything; per-feature data is namespaced by subfolder:
   - reports/        — generated PDF/CSV reports
   - feature-files/  — uploaded .feature files
   - artifacts/      — test artifacts produced during verification
+  - training-data/  — manually uploaded .feature / .jsonl training corpora
 
 Object paths land at {user_id}/{folder}/{path} so the user_id stays the
 first path segment, keeping the RLS policy in
@@ -39,6 +40,7 @@ class StorageServiceError(Exception):
 FOLDER_REPORTS = "reports"
 FOLDER_FEATURE_FILES = "feature-files"
 FOLDER_ARTIFACTS = "artifacts"
+FOLDER_TRAINING_DATA = "training-data"
 
 
 def _scope(user_id: str, folder: str, path: str) -> str:

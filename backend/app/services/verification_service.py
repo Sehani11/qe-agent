@@ -1,56 +1,54 @@
-"""LLM Verification Service.
+"""Verification helpers shared by the agentic verification service.
 
-Parses BDD scenarios from Gherkin content, evaluates each against fetched
-source code via the LLM provider, and streams per-scenario verdicts as SSE.
-
-Architecture rules enforced here:
-- Never call LLM SDKs directly — always via LLMProvider.generate_structured()
-- No business logic belongs in route handlers
-- DB persistence happens after each yield (streaming-safe)
+Once the pipeline was BDD parsing + a direct LLM pass over pre-fetched files;
+that legacy runner was removed when the UI moved to /run-agentic. What remains
+is the shared substrate: Gherkin parsing, file-relevance selection, RAG-block
+formatting, and the single sources of truth for the verdict wire shape and the
+persisted VerificationResult row.
 """
 
-import json
-import logging
 import re
 import uuid
-from collections.abc import AsyncGenerator
-
-from sqlalchemy.ext.asyncio import AsyncSession
+from difflib import SequenceMatcher
 
 from app.models.verification_result import VerificationResult
-from app.schemas.verification import FetchedFile, VerificationVerdict
-from app.services.llm.provider import LLMProvider, LLMProviderError
-
-logger = logging.getLogger(__name__)
+from app.schemas.verification import FetchedFile, RagContextItem, VerificationVerdict
+from app.services import knowledge_service as _ks
+from app.services.evaluation_metrics import NEAR_DUPLICATE_RATIO
 
 _SCENARIO_PATTERN = re.compile(
-    r"^\s*(Scenario(?:\s+Outline)?)\s*:\s*(.+?)$", re.MULTILINE
+    r"^\s*(Scenario(?:\s+Outline)?)\s*:\s*(.+?)\s*$"
 )
 
-_SYSTEM_PROMPT = """\
-You are a senior QA engineer and code reviewer. Your task is to evaluate
-whether a given BDD scenario is covered by the provided source code.
+#: The traceability comment `scenariosToGherkin` writes above each scenario.
+_SOURCE_AC_PATTERN = re.compile(r"^\s*#\s*Source AC\s*:\s*(.+?)\s*$", re.IGNORECASE)
 
-Respond ONLY with a valid JSON object. No explanations outside the JSON.
-Schema: {
-  "scenario_id": "<same as input>",
-  "scenario_title": "<same as input>",
-  "status": "pass" | "fail",
-  "justification": "<natural-language explanation referencing specific code>",
-  "code_reference": {"file": "<path>", "function": "<name>", "line": <integer>},
-  "github_links": ["<exact file path from [F:...] tag used as evidence>"],
-  "implementation_suggestion": "<actionable guidance for fixing the gap>" | null
-}
+_COMMENT_OR_BLANK_PATTERN = re.compile(r"^\s*(#.*)?$")
 
-Rules:
-- status="pass" only if the scenario's acceptance criteria is FULLY handled in the code
-- status="fail" if ANY part is missing, incomplete, or incorrect
-- justification MUST reference specific code (function name, variable, condition)
-- implementation_suggestion MUST be non-null and actionable when status="fail"
-- implementation_suggestion MUST be null when status="pass"\
-"""
+#: Punctuation stripper, matching the evaluation metrics' normalisation so a
+#: scenario judged a duplicate here would be judged one there too.
+_NORMALISE_RE = re.compile(r"[^a-z0-9\s]+")
 
-_FILE_CONTENT_TRUNCATE = 3_000   # chars per file sent to LLM
+#: Below this many normalised characters, only an exact repeat counts as a
+#: duplicate. A real Gherkin scenario runs well past it; the floor exists so
+#: two terse scenarios that differ by a single word are never merged.
+_MIN_FUZZY_MATCH_LENGTH = 120
+
+#: Similarity required to call two scenarios duplicates when they already share
+#: a title AND an acceptance-criterion clause. Agreeing on both is near-certainly
+#: one question asked twice, so less textual overlap is needed than for an
+#: unrelated pair — but not none, because one AC can legitimately carry several
+#: scenarios that differ in what they actually check.
+#:
+#: Calibrated against measured pairs rather than picked: reworded duplicates
+#: scored 0.48 and 0.56, while a same-title pair testing genuinely different
+#: things scored 0.36. The margin is real but modest, so the value sits nearer
+#: the lower duplicate than the upper distinct case — and the identity gate in
+#: front of it (byte-identical title AND clause) is what carries most of the
+#: confidence. Both cases are pinned by tests; retune with those, not by feel.
+_SAME_INTENT_RATIO = 0.45
+
+_FILE_CONTENT_TRUNCATE = 24_000  # chars per file sent to LLM
 _MAX_FILES_PER_SCENARIO = 6      # top-N most relevant files per scenario call
 
 # Gherkin keywords and common English stopwords to ignore when scoring relevance
@@ -63,38 +61,10 @@ _STOPWORDS = frozenset(
 )
 
 
-def _resolve_github_links(
-    links: list[str], files: list[FetchedFile]
-) -> list[str]:
-    """Replace relative file paths in LLM-generated links with real GitHub URLs.
-
-    The LLM returns file paths (e.g. ``app/auth/login.py``) as evidence.
-    This maps each path back to the ``github_url`` on the corresponding
-    ``FetchedFile``, falling back to suffix-matching when the LLM omits a
-    leading directory segment.  Absolute URLs are kept as-is.
-    """
-    url_map = {f.path: f.github_url for f in files if f.github_url}
-    resolved: list[str] = []
-    for link in links:
-        if link.startswith("http://") or link.startswith("https://"):
-            resolved.append(link)
-            continue
-        # Exact match
-        if link in url_map:
-            resolved.append(url_map[link])
-            continue
-        # Suffix match (LLM may strip leading dirs)
-        matched = next(
-            (url for path, url in url_map.items() if path.endswith(link) or link.endswith(path)),
-            None,
-        )
-        resolved.append(matched if matched else link)
-    return resolved
-
-
 def _score_file_relevance(scenario: dict, file: FetchedFile) -> int:
-    """Return a relevance score for a file against a scenario (higher = more relevant)."""
-    words = re.findall(r"\b[a-z]{3,}\b", (scenario["title"] + " " + scenario["text"]).lower())
+    """Return a relevance score for a file against a scenario."""
+    combined = (scenario["title"] + " " + scenario["text"]).lower()
+    words = re.findall(r"\b[a-z]{3,}\b", combined)
     keywords = {w for w in words if w not in _STOPWORDS}
     if not keywords:
         return 0
@@ -115,175 +85,319 @@ def _score_file_relevance(scenario: dict, file: FetchedFile) -> int:
 def _select_relevant_files(
     scenario: dict, files: list[FetchedFile]
 ) -> list[FetchedFile]:
-    """Return the most relevant files for this scenario, capped at _MAX_FILES_PER_SCENARIO."""
+    """Return the top-N most relevant files for this scenario."""
     if len(files) <= _MAX_FILES_PER_SCENARIO:
         return files
-    scored = sorted(files, key=lambda f: _score_file_relevance(scenario, f), reverse=True)
+    scored = sorted(
+        files, key=lambda f: _score_file_relevance(scenario, f), reverse=True
+    )
     return scored[:_MAX_FILES_PER_SCENARIO]
+
+
+def deduplicate_scenarios(scenarios: list[dict]) -> tuple[list[dict], int]:
+    """Drop scenarios that repeat one already in the list.
+
+    Returns ``(kept, dropped_count)``, preserving the original order.
+
+    A BDD file accumulates duplicates easily — the model emits two phrasings of
+    one acceptance criterion, or a regenerated file is appended to an earlier
+    one — and verification pays full price per scenario. Deciding the same
+    question twice costs twice and, worse, can answer it two different ways in
+    the same report, which is how a reader loses confidence in all of it.
+
+    Matching is deliberately lexical (the same normalise-and-compare used by the
+    evaluation metrics, at the same threshold): unarguable and reproducible,
+    where a semantic match would silently merge two scenarios that differ in a
+    detail exactly one of them was written to test.
+
+    Short scenarios must match exactly to be dropped. Similarity is unreliable
+    over a few words — "when they do A" and "when they do B" score as near
+    identical because almost every character is shared boilerplate — and the
+    cost of being wrong is asymmetric: an extra scenario costs one call, while a
+    wrongly dropped one silently deletes coverage the reader still believes they
+    have.
+
+    Two scenarios that share a title *and* an acceptance-criterion clause are
+    matched on a lower similarity bar. Agreeing on both is strong evidence of
+    one question asked twice — the generator rephrasing a scenario it already
+    wrote — which raw text similarity misses when the rewording is thorough. The
+    bar is lowered rather than removed, since one AC can legitimately carry
+    several scenarios that check genuinely different things.
+    """
+    kept: list[dict] = []
+    kept_keys: list[tuple[str, str]] = []
+    dropped = 0
+
+    for scenario in scenarios:
+        text = _normalise_scenario(scenario)
+        identity = _scenario_identity(scenario)
+        if any(
+            _is_duplicate(text, identity, earlier_text, earlier_identity)
+            for earlier_text, earlier_identity in kept_keys
+        ):
+            dropped += 1
+            continue
+        kept.append(scenario)
+        kept_keys.append((text, identity))
+
+    return kept, dropped
+
+
+def _is_duplicate(
+    text: str, identity: str, earlier_text: str, earlier_identity: str
+) -> bool:
+    """Whether one scenario repeats another already kept."""
+    if text == earlier_text:
+        return True
+
+    # Same title and same acceptance criterion: a much weaker textual match is
+    # enough, because the pair already agrees on what it is testing and why.
+    if identity and identity == earlier_identity:
+        return (
+            SequenceMatcher(None, text, earlier_text).ratio() >= _SAME_INTENT_RATIO
+        )
+
+    if (
+        len(text) < _MIN_FUZZY_MATCH_LENGTH
+        or len(earlier_text) < _MIN_FUZZY_MATCH_LENGTH
+    ):
+        return False
+    return SequenceMatcher(None, text, earlier_text).ratio() >= NEAR_DUPLICATE_RATIO
+
+
+def _scenario_identity(scenario: dict) -> str:
+    """Title plus acceptance clause, normalised — "" when there is no clause.
+
+    Empty is deliberate for a file with no traceability comments: without a
+    clause, a shared title alone is far too weak to merge on.
+    """
+    clause = (scenario.get("ac_clause") or "").strip()
+    if not clause:
+        return ""
+    combined = f"{scenario.get('title', '')} {clause}"
+    return " ".join(_NORMALISE_RE.sub(" ", combined.lower()).split())
+
+
+def _normalise_scenario(scenario: dict) -> str:
+    """Title plus steps, lowercased and stripped of punctuation.
+
+    The title alone is too weak — two scenarios can share a title and test
+    different things — and the steps alone too strong, since boilerplate Givens
+    make unrelated scenarios look alike.
+    """
+    combined = f"{scenario.get('title', '')} {scenario.get('text', '')}"
+    return " ".join(_NORMALISE_RE.sub(" ", combined.lower()).split())
+
+
+def truncate_with_notice(content: str, path: str) -> str:
+    """Cap one file's content for a prompt, announcing any truncation.
+
+    The evidence block carries the files the user explicitly selected, so a file
+    cut short here is one the verdict is *expected* to be based on. Cutting it
+    silently is what turns "I could not see it" into "it is not implemented":
+    at the old 3 000-char cap a 7 400-char route file ended one line above its
+    filter implementation, and every filter was duly reported missing.
+
+    Content that fits is returned unchanged, so the common case is unannotated.
+    """
+    total = len(content)
+    if total <= _FILE_CONTENT_TRUNCATE:
+        return content
+    return (
+        content[:_FILE_CONTENT_TRUNCATE]
+        + f"\n\n[TRUNCATED — {_FILE_CONTENT_TRUNCATE} of {total} chars of "
+        f"'{path}' shown; this is NOT the whole file. Call get_file_contents "
+        f"with path='{path}' and offset={_FILE_CONTENT_TRUNCATE} to read the "
+        f"rest BEFORE concluding that anything is missing from it.]"
+    )
 
 
 def parse_bdd_scenarios(bdd_content: str) -> list[dict]:
     """Parse Gherkin text and return a list of scenario dicts.
 
-    Each dict has keys: id (UUID string), title (str), text (str).
+    Each dict has keys: id (UUID string), title (str), text (str), and
+    ac_clause (str, empty when the file carries no traceability comment).
     Returns an empty list if no scenarios are found.
+
+    Scenario boundaries are drawn at lines, not at the next header's match
+    offset. The generated Gherkin puts a ``# Source AC:`` comment *above* each
+    scenario, so a block that simply runs to the next header swallows the
+    comment introducing that next scenario: every scenario then carries its
+    neighbour's acceptance criterion into the verification prompt, and the first
+    scenario's own clause is lost entirely. It also makes two identical
+    scenarios compare as different, because each ends with a different
+    neighbour — which is how duplicates survive deduplication.
     """
-    matches = list(_SCENARIO_PATTERN.finditer(bdd_content))
+    lines = bdd_content.splitlines()
+    headers = [i for i, line in enumerate(lines) if _SCENARIO_PATTERN.match(line)]
     scenarios: list[dict] = []
 
-    for i, match in enumerate(matches):
-        title = match.group(2).strip()
-        start = match.start()
-        end = matches[i + 1].start() if i + 1 < len(matches) else len(bdd_content)
-        text = bdd_content[start:end].strip()
+    for position, header in enumerate(headers):
+        next_header = (
+            headers[position + 1] if position + 1 < len(headers) else len(lines)
+        )
+
+        # Walk back off the trailing comment/blank block: it introduces the NEXT
+        # scenario. Never past the header itself, so a scenario with no body
+        # still keeps its title line.
+        end = next_header
+        while end > header + 1 and _COMMENT_OR_BLANK_PATTERN.match(lines[end - 1]):
+            end -= 1
+
+        match = _SCENARIO_PATTERN.match(lines[header])
         scenarios.append(
             {
                 "id": str(uuid.uuid4()),
-                "title": title,
-                "text": text,
+                "title": match.group(2).strip(),
+                "text": "\n".join(lines[header:end]).strip(),
+                "ac_clause": _leading_ac_clause(lines, header),
             }
         )
 
     return scenarios
 
 
-def _build_verification_prompt(
-    scenario: dict,
-    fetched_files: list[FetchedFile],
-) -> tuple[str, str]:
-    """Build (system_prompt, user_prompt) for a single scenario evaluation.
+def _leading_ac_clause(lines: list[str], header: int) -> str:
+    """The ``# Source AC:`` clause introducing the scenario at ``header``.
 
-    Only the most relevant files are included (capped at _MAX_FILES_PER_SCENARIO)
-    and each file is truncated to _FILE_CONTENT_TRUNCATE chars to stay within
-    token limits.
+    Scans back over the contiguous comment/blank block immediately above the
+    scenario and stops at the first real Gherkin line, so a clause can never be
+    picked up from an earlier scenario. Returns "" when the file carries no
+    traceability comments, which is normal for hand-written feature files.
     """
-    relevant = _select_relevant_files(scenario, fetched_files)
+    index = header - 1
+    while index >= 0 and _COMMENT_OR_BLANK_PATTERN.match(lines[index]):
+        match = _SOURCE_AC_PATTERN.match(lines[index])
+        if match:
+            return match.group(1).strip()
+        index -= 1
+    return ""
 
+
+def format_rag_block(chunks: list[dict] | None) -> str:
+    """Format retrieved knowledge chunks as a PROJECT CONTEXT prompt block.
+
+    Returns "" when there are no chunks. Shared by the direct and agentic
+    verification prompts so both surface knowledge-base context identically.
+    """
+    if not chunks:
+        return ""
     lines = [
-        f"SCENARIO_ID:{scenario['id']}",
-        f"TITLE:{scenario['title']}",
-        scenario["text"],
-        "",
-        "CODE:",
+        "PROJECT CONTEXT:",
+        "The following knowledge base excerpts are relevant to this scenario:",
     ]
+    for chunk in chunks:
+        lines.append(f"[{chunk['source'].upper()}:{chunk['source_id']}]")
+        # Full chunk text when available; the 300-char snippet is a UI/persistence
+        # artefact and loses most of the retrieved evidence.
+        lines.append(chunk.get("text") or chunk.get("snippet", ""))
+        lines.append("")
+    return "\n".join(lines)
 
-    for file in relevant:
-        lines.append(f"[F:{file.path}]")
-        lines.append(file.content[:_FILE_CONTENT_TRUNCATE])
-        lines.append("[/F]")
 
-    return _SYSTEM_PROMPT, "\n".join(lines)
+def rag_payload_from_chunks(chunks: list[dict]) -> list[dict] | None:
+    """Normalize retrieved chunks into a rag_context payload (or None if empty)."""
+    if not chunks:
+        return None
+    items = [
+        RagContextItem(
+            source=c["source"],
+            source_id=c["source_id"],
+            snippet=c["snippet"],
+            title=c.get("title", ""),
+            url=c.get("url", ""),
+        )
+        for c in chunks
+    ]
+    return [item.model_dump() for item in items]
 
 
-async def run_verification(
+def verdict_event_dict(
+    verdict: VerificationVerdict,
+    rag_context_payload: list[dict] | None,
+    usage: dict | None = None,
+) -> dict:
+    """Build the SSE ``verdict`` event payload — shared by both verification paths.
+
+    Single source of truth for the verdict wire shape so the direct and agentic
+    services can't silently diverge on fields (e.g. rag_context).
+
+    ``usage`` carries what the agent loop cost for this scenario — rounds and
+    token counts. Only the agentic path has a loop to measure, so it stays
+    None on the direct path rather than being faked with zeros, which would
+    read as "this run was free" instead of "not applicable here".
+    """
+    return {
+        "type": "verdict",
+        "scenario_id": verdict.scenario_id,
+        "scenario_title": verdict.scenario_title,
+        "status": verdict.status,
+        "justification": verdict.justification,
+        "code_reference": verdict.code_reference.model_dump(),
+        "github_links": verdict.github_links,
+        "implementation_suggestion": verdict.implementation_suggestion,
+        "rag_context": rag_context_payload,
+        "usage": usage,
+    }
+
+
+def build_verification_result(
     session_id: str,
     user_id: str,
-    bdd_content: str,
-    fetched_files: list[FetchedFile],
-    llm: LLMProvider,
-    db: AsyncSession,
-) -> AsyncGenerator[str, None]:
-    """Stream per-scenario verdicts as SSE events.
+    verdict: VerificationVerdict,
+    rag_context_payload: list[dict] | None,
+    mode: str | None = None,
+    github_input: str | None = None,
+) -> VerificationResult:
+    """Construct a VerificationResult row — shared by both verification paths.
 
-    Yields:
-        SSE-formatted strings ending with double newline.
-        - ``data: {"type": "verdict", ...}\\n\\n`` per scenario
-        - ``data: {"type": "complete", ...}\\n\\n`` after all scenarios
-        - ``data: {"type": "error", ...}\\n\\n`` on critical or per-scenario failures
+    Persistence (flush / savepoint) stays with the caller; this only builds the
+    ORM object so the column list has one source of truth.
+
+    ``mode`` and ``github_input`` record the source the verdict was produced
+    against, so a revisited session can show it and restore the workspace's
+    source field. They default to None only so the signature stays compatible
+    with callers that predate the columns; the live path always passes them.
     """
-    # Filter truncation-notice artefacts inserted by fetch_full_repo
-    filtered_files = [f for f in fetched_files if not f.path.startswith("[WARNING]")]
-
-    scenarios = parse_bdd_scenarios(bdd_content)
-    if not scenarios:
-        yield _sse_event(
-            {"type": "error", "message": "No BDD scenarios found in content"}
-        )
-        return
-
-    total = len(scenarios)
-    passed = 0
-    failed = 0
-
-    for scenario in scenarios:
-        system_prompt, user_prompt = _build_verification_prompt(
-            scenario, filtered_files
-        )
-
-        try:
-            verdict_dict = await llm.generate_structured(user_prompt, system_prompt)
-        except LLMProviderError as exc:
-            yield _sse_event({"type": "error", "message": f"LLM call failed: {exc}"})
-            continue
-
-        # Resolve relative file paths in github_links to absolute GitHub URLs
-        if "github_links" in verdict_dict:
-            verdict_dict["github_links"] = _resolve_github_links(
-                verdict_dict["github_links"], filtered_files
-            )
-
-        try:
-            verdict = VerificationVerdict(**verdict_dict)
-        except Exception as exc:
-            yield _sse_event(
-                {
-                    "type": "error",
-                    "message": (
-                        f"LLM returned malformed verdict"
-                        f" for '{scenario['title']}': {exc}"
-                    ),
-                }
-            )
-            continue
-
-        # Yield verdict SSE event
-        verdict_event: dict = {
-            "type": "verdict",
-            "scenario_id": verdict.scenario_id,
-            "scenario_title": verdict.scenario_title,
-            "status": verdict.status,
-            "justification": verdict.justification,
-            "code_reference": verdict.code_reference.model_dump(),
-            "github_links": verdict.github_links,
-            "implementation_suggestion": verdict.implementation_suggestion,
-        }
-        yield _sse_event(verdict_event)
-
-        if verdict.status == "pass":
-            passed += 1
-        else:
-            failed += 1
-
-        # Persist result to DB after yielding
-        try:
-            result = VerificationResult(
-                session_id=session_id,
-                user_id=user_id,
-                scenario_id=uuid.UUID(verdict.scenario_id),
-                scenario_title=verdict.scenario_title,
-                status=verdict.status,
-                justification=verdict.justification,
-                code_reference=verdict.code_reference.model_dump(),
-                github_links=verdict.github_links,
-                implementation_suggestion=verdict.implementation_suggestion,
-            )
-            db.add(result)
-            await db.flush()
-        except Exception as exc:
-            # Persistence failure must not interrupt the SSE stream, but log it
-            logger.warning(
-                "Failed to persist verdict for session=%s scenario=%r: %s",
-                session_id,
-                scenario["title"],
-                exc,
-                exc_info=True,
-            )
-
-    yield _sse_event(
-        {"type": "complete", "total": total, "passed": passed, "failed": failed}
+    return VerificationResult(
+        session_id=session_id,
+        user_id=user_id,
+        scenario_id=uuid.UUID(verdict.scenario_id),
+        scenario_title=verdict.scenario_title,
+        status=verdict.status,
+        justification=verdict.justification,
+        code_reference=verdict.code_reference.model_dump(),
+        github_links=verdict.github_links,
+        implementation_suggestion=verdict.implementation_suggestion,
+        rag_context=rag_context_payload,
+        verification_mode=mode,
+        github_input=github_input,
     )
 
 
-def _sse_event(data: dict) -> str:
-    """Serialize a dict to an SSE data line ending with double newline."""
-    return f"data: {json.dumps(data)}\n\n"
+async def retrieve_rag_per_scenario(
+    user_id: str,
+    scenarios: list[dict],
+    enabled: bool,
+    project_id: uuid.UUID | str | None = None,
+    config=None,
+) -> list[list[dict]]:
+    """Retrieve knowledge-base context for EACH scenario, in parallel.
+
+    Querying per scenario (with that scenario's own Gherkin + AC text) yields
+    context relevant to that specific scenario, which is more accurate than a
+    single shared query over the whole BDD. Returns a list aligned with
+    ``scenarios`` (each element the chunks for that scenario).
+
+    ``enabled`` is the caller's per-run opt-in (the ``use_knowledge_base`` request
+    flag) — when False, no query runs and every scenario gets an empty list. Uses
+    ``query_knowledge_base_batch`` (one embeddings request for all scenarios,
+    shared client, per-query failure isolation), which never raises and stays
+    within the NFR-P6 budget. Shared by the direct and agentic verification paths.
+    """
+    if not enabled:
+        return [[] for _ in scenarios]
+
+    return await _ks.query_knowledge_base_batch(
+        user_id, [s["text"] for s in scenarios], project_id=project_id, config=config
+    )

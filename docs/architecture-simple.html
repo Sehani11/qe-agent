@@ -1,0 +1,308 @@
+<title>QE Verification Agent — Simple Architecture</title>
+
+<style>
+  :root {
+    --ground:  #F5F6F7;
+    --panel:   #EBEFF1;
+    --surface: #FFFFFF;
+    --ink:     #161A1D;
+    --muted:   #5E6A73;
+    --line:    #D3DADE;
+    --line-2:  #8E9BA3;
+    --accent:  #0C6F79;
+
+    --serif: "Iowan Old Style", "Palatino Linotype", Palatino, Georgia, "Times New Roman", serif;
+    --sans: system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+    --mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, "Liberation Mono", monospace;
+  }
+
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --ground:  #131719;
+      --panel:   #1D2327;
+      --surface: #1A1F22;
+      --ink:     #E4E9EC;
+      --muted:   #94A1A9;
+      --line:    #2E363B;
+      --line-2:  #6C7A83;
+      --accent:  #4BBCC6;
+    }
+  }
+  :root[data-theme="dark"] {
+    --ground:  #131719;
+    --panel:   #1D2327;
+    --surface: #1A1F22;
+    --ink:     #E4E9EC;
+    --muted:   #94A1A9;
+    --line:    #2E363B;
+    --line-2:  #6C7A83;
+    --accent:  #4BBCC6;
+  }
+
+  body {
+    background: var(--ground);
+    color: var(--ink);
+    font-family: var(--sans);
+    font-size: 16px;
+    line-height: 1.6;
+    margin: 0;
+    padding: 0 24px 88px;
+  }
+  .wrap { max-width: 1040px; margin: 0 auto; }
+
+  header.page { padding: 64px 0 36px; }
+  .eyebrow {
+    font-size: 11px; font-weight: 600; letter-spacing: 0.14em;
+    color: var(--muted); margin: 0 0 14px;
+  }
+  header.page h1 {
+    font-family: var(--serif);
+    font-size: clamp(28px, 4vw, 38px);
+    font-weight: 400; line-height: 1.15; letter-spacing: -0.01em;
+    text-wrap: balance; margin: 0 0 18px;
+  }
+  .lede {
+    font-family: var(--serif);
+    font-size: 19px; line-height: 1.55;
+    max-width: 60ch; margin: 0;
+  }
+
+  figure {
+    margin: 40px 0 0;
+  }
+  .canvas {
+    overflow-x: auto;
+    background: var(--surface);
+    border: 1px solid var(--line);
+    border-radius: 4px;
+    padding: 24px;
+  }
+  .canvas svg {
+    display: block; width: 100%; min-width: 760px; height: auto;
+    color: var(--ink);
+  }
+  figcaption {
+    font-family: var(--serif);
+    font-size: 15px; line-height: 1.65;
+    color: var(--muted); max-width: 74ch; margin-top: 20px;
+  }
+  figcaption strong { color: var(--ink); font-weight: 600; }
+
+  .walk { margin-top: 56px; border-top: 1px solid var(--line); padding-top: 40px; }
+  .walk h2 {
+    font-family: var(--serif); font-weight: 400; font-size: 24px;
+    margin: 0 0 28px; letter-spacing: -0.005em;
+  }
+  .steps { display: grid; gap: 22px; }
+  .step { display: grid; grid-template-columns: 40px 1fr; gap: 18px; align-items: start; }
+  .step .n {
+    font-family: var(--mono); font-size: 13px; font-weight: 700;
+    color: var(--accent); padding-top: 3px;
+  }
+  .step h3 { font-size: 16px; font-weight: 600; margin: 0 0 4px; }
+  .step p { margin: 0; color: var(--muted); font-size: 15px; max-width: 68ch; }
+
+  .note {
+    margin-top: 40px; padding: 18px 22px;
+    background: var(--panel); border: 1px solid var(--line); border-radius: 4px;
+    font-size: 14px; color: var(--muted); max-width: 76ch;
+  }
+  .note b { color: var(--ink); font-weight: 600; }
+
+  /* diagram primitives */
+  .b  { fill: var(--surface); stroke: var(--line-2); stroke-width: 1.2; }
+  .bp { fill: var(--panel);   stroke: var(--line);   stroke-width: 1; }
+  .ln { fill: none; stroke: var(--line-2); stroke-width: 1.4; }
+  .lnd { fill: none; stroke: var(--line-2); stroke-width: 1.2; stroke-dasharray: 5 4; }
+
+  text { font-family: var(--sans); }
+  .num { font-family: var(--mono); font-size: 15px; font-weight: 700; fill: var(--accent); }
+  .h  { font-size: 15px; font-weight: 600; fill: var(--ink); }
+  .h2 { font-size: 14px; font-weight: 600; fill: var(--ink); }
+  .p  { font-size: 11.5px; fill: var(--muted); }
+  .eb { font-size: 9.5px; font-weight: 700; letter-spacing: 0.1em; fill: var(--muted); }
+  .lb { font-size: 11px; fill: var(--muted); }
+</style>
+
+<div class="wrap">
+
+<header class="page">
+  <p class="eyebrow">QE VERIFICATION AGENT</p>
+  <h1>How the system works</h1>
+  <p class="lede">The system reads a requirement from Jira, writes test scenarios from it,
+  checks whether the code on GitHub actually implements them, and produces a report linking
+  each requirement to its result.</p>
+</header>
+
+<figure>
+  <div class="canvas">
+  <svg viewBox="0 0 1000 620" role="img"
+       aria-label="A user works through a web interface. The application server performs four steps in sequence: read the requirement, write test scenarios, check the code, and build the report. Each step draws on an outside resource: Jira for the requirement, an AI model for the scenarios, GitHub and project documents for the code check, and a PDF or CSV file as output. Everything produced is stored and can be reopened later.">
+    <defs>
+      <marker id="s1" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+        <path d="M0,1 L9,5 L0,9 z" fill="var(--line-2)"/>
+      </marker>
+    </defs>
+
+    <!-- user -->
+    <rect class="b" x="390" y="26" width="220" height="56" rx="3"/>
+    <text class="h" x="500" y="50" text-anchor="middle">User</text>
+    <text class="p" x="500" y="68" text-anchor="middle">QA engineer or developer</text>
+
+    <line class="ln" x1="500" y1="82" x2="500" y2="114" marker-end="url(#s1)"/>
+
+    <!-- web interface -->
+    <rect class="b" x="330" y="114" width="340" height="56" rx="3"/>
+    <text class="h" x="500" y="138" text-anchor="middle">Web interface</text>
+    <text class="p" x="500" y="156" text-anchor="middle">runs in the browser</text>
+
+    <line class="ln" x1="500" y1="170" x2="500" y2="202" marker-end="url(#s1)"/>
+
+    <!-- application server band -->
+    <rect class="bp" x="32" y="202" width="936" height="190" rx="4"/>
+    <text class="eb" x="44" y="224">APPLICATION SERVER · FOUR STEPS, IN ORDER</text>
+
+    <!-- step 1 -->
+    <rect class="b" x="44" y="238" width="204" height="118" rx="3"/>
+    <text class="num" x="60" y="266">1</text>
+    <text class="h2" x="60" y="292">Read the</text>
+    <text class="h2" x="60" y="310">requirement</text>
+    <text class="p" x="60" y="330">Pulls the ticket and its</text>
+    <text class="p" x="60" y="346">acceptance criteria</text>
+
+    <line class="ln" x1="248" y1="297" x2="280" y2="297" marker-end="url(#s1)"/>
+
+    <!-- step 2 -->
+    <rect class="b" x="280" y="238" width="204" height="118" rx="3"/>
+    <text class="num" x="296" y="266">2</text>
+    <text class="h2" x="296" y="292">Write test</text>
+    <text class="h2" x="296" y="310">scenarios</text>
+    <text class="p" x="296" y="330">Turns each criterion into</text>
+    <text class="p" x="296" y="346">Given / When / Then</text>
+
+    <line class="ln" x1="484" y1="297" x2="516" y2="297" marker-end="url(#s1)"/>
+
+    <!-- step 3 -->
+    <rect class="b" x="516" y="238" width="204" height="118" rx="3"/>
+    <text class="num" x="532" y="266">3</text>
+    <text class="h2" x="532" y="292">Check the</text>
+    <text class="h2" x="532" y="310">code</text>
+    <text class="p" x="532" y="330">An AI agent reads the</text>
+    <text class="p" x="532" y="346">code, scenario by scenario</text>
+
+    <line class="ln" x1="720" y1="297" x2="752" y2="297" marker-end="url(#s1)"/>
+
+    <!-- step 4 -->
+    <rect class="b" x="752" y="238" width="204" height="118" rx="3"/>
+    <text class="num" x="768" y="266">4</text>
+    <text class="h2" x="768" y="292">Build the</text>
+    <text class="h2" x="768" y="310">report</text>
+    <text class="p" x="768" y="330">Links requirement to</text>
+    <text class="p" x="768" y="346">result and code location</text>
+
+    <!-- drops to resources -->
+    <line class="ln" x1="146" y1="392" x2="146" y2="436" marker-end="url(#s1)"/>
+    <line class="ln" x1="382" y1="392" x2="382" y2="436" marker-end="url(#s1)"/>
+    <line class="ln" x1="618" y1="392" x2="618" y2="436" marker-end="url(#s1)"/>
+    <line class="ln" x1="854" y1="392" x2="854" y2="436" marker-end="url(#s1)"/>
+
+    <text class="eb" x="44" y="424">WHAT EACH STEP USES</text>
+
+    <!-- resources -->
+    <rect class="b" x="44" y="436" width="204" height="82" rx="3"/>
+    <text class="h2" x="60" y="464">Jira</text>
+    <text class="p" x="60" y="484">The issue tracker where</text>
+    <text class="p" x="60" y="500">requirements already live</text>
+
+    <rect class="b" x="280" y="436" width="204" height="82" rx="3"/>
+    <text class="h2" x="296" y="464">AI language model</text>
+    <text class="p" x="296" y="484">A hosted model, or one</text>
+    <text class="p" x="296" y="500">trained for this task</text>
+
+    <rect class="b" x="516" y="436" width="204" height="82" rx="3"/>
+    <text class="h2" x="532" y="464">GitHub + documents</text>
+    <text class="p" x="532" y="484">The source code, plus</text>
+    <text class="p" x="532" y="500">project docs for context</text>
+
+    <rect class="b" x="752" y="436" width="204" height="82" rx="3"/>
+    <text class="h2" x="768" y="464">PDF or CSV file</text>
+    <text class="p" x="768" y="484">Downloaded, shared, or</text>
+    <text class="p" x="768" y="500">attached to a ticket</text>
+
+    <!-- storage -->
+    <line class="lnd" x1="500" y1="392" x2="500" y2="552" marker-end="url(#s1)"/>
+    <text class="lb" x="510" y="540">saves</text>
+
+    <rect class="bp" x="32" y="552" width="936" height="56" rx="4"/>
+    <text class="eb" x="48" y="574">STORED THROUGHOUT</text>
+    <text class="p" x="48" y="594">Every ticket, scenario, result and report is saved against the user&#8217;s account, and any past session can be reopened.</text>
+  </svg>
+  </div>
+
+  <figcaption>The four steps run in order, and each one draws on a resource outside the
+  system. <strong>Step 3 is where the research contribution sits</strong>: instead of a person
+  reading the code to decide whether a requirement was implemented, an AI agent searches the
+  repository, reads the relevant files, and returns a pass or fail for every scenario with the
+  code location it relied on.</figcaption>
+</figure>
+
+<section class="walk">
+  <h2>The same thing in words</h2>
+  <div class="steps">
+
+    <div class="step">
+      <div class="n">1</div>
+      <div>
+        <h3>Read the requirement</h3>
+        <p>The user pastes a Jira ticket ID or link. The system fetches the ticket and pulls
+        out its acceptance criteria — the numbered statements describing what the feature
+        must do.</p>
+      </div>
+    </div>
+
+    <div class="step">
+      <div class="n">2</div>
+      <div>
+        <h3>Write test scenarios</h3>
+        <p>An AI model converts each acceptance criterion into one or more Gherkin scenarios
+        in Given / When / Then form. Each scenario records which criterion it came from, so
+        nothing later has to guess. The user can edit them, or upload scenarios the team
+        already wrote.</p>
+      </div>
+    </div>
+
+    <div class="step">
+      <div class="n">3</div>
+      <div>
+        <h3>Check the code</h3>
+        <p>The user points the system at a repository, a set of files, or a pull request. For
+        each scenario the AI agent searches the code, opens the files that look relevant, reads
+        them, and decides whether the scenario is implemented. It returns a pass or fail, an
+        explanation, and a link to the exact file and line. If it fails, it also suggests what
+        to add. If the agent could not read any code at all, the scenario is failed as
+        <em>not verified</em> rather than guessed at.</p>
+      </div>
+    </div>
+
+    <div class="step">
+      <div class="n">4</div>
+      <div>
+        <h3>Build the report</h3>
+        <p>The results are assembled into a table linking each acceptance criterion to its
+        scenario, its verdict, and the code that was examined — downloadable as PDF or CSV.
+        No AI is involved at this stage, so the same session always produces the same report.</p>
+      </div>
+    </div>
+
+  </div>
+
+  <div class="note">
+    <b>Two things the diagram leaves out on purpose.</b> The system can also answer questions
+    about a ticket or about the wider project, using the ingested documents as its only source.
+    And the AI model in step 2 is swappable — a general-purpose model or a smaller one trained
+    specifically on this task — which is what made the model comparison in the research
+    possible. Both appear in the detailed architecture figures.
+  </div>
+</section>
+
+</div>

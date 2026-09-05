@@ -14,6 +14,19 @@ const nextConfig: NextConfig = {
       allowedOrigins: [siteHost],
     },
   }),
+  // /training and /comparison merged into /fine-tune. Redirected rather than
+  // deleted outright so bookmarks and any link shared in a ticket still land
+  // somewhere useful instead of on a 404.
+  //
+  // Not `permanent`: a 308 is cached hard by the browser, which is a poor trade
+  // while the information architecture is still moving. A 307 costs one request
+  // and can be taken back.
+  async redirects() {
+    return [
+      { source: "/training", destination: "/fine-tune", permanent: false },
+      { source: "/comparison", destination: "/fine-tune", permanent: false },
+    ];
+  },
 };
 
 export default nextConfig;

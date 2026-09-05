@@ -76,7 +76,7 @@ _This document builds collaboratively through step-by-step discovery. Sections a
 ### Technical Constraints & Dependencies
 
 - Supabase Auth is the session authority — all FastAPI endpoints must verify JWTs issued by Supabase.
-- Pinecone embeddings namespaced `user_id:session_id` for ticket Q&A, and `user_id:workspace` for project knowledge base — enforced at write AND read time.
+- Pinecone embeddings namespaced `user_id:session_id` for ticket Q&A, and `user_id:knowledge` for project knowledge base — enforced at write AND read time.
 - LLM provider behind an abstract interface — no `openai.` or `anthropic.` calls directly in business logic.
 - Fine-tuned model behind a separate abstraction — allowing swap between fine-tuned model and general LLM for BDD generation.
 - All API tokens stored as env vars — frontend must never receive or proxy credentials.
@@ -154,14 +154,15 @@ npm install axios @tanstack/react-query @tanstack/react-query-devtools
 
 - **Session Strategy:** SQLAlchemy `AsyncSession` via `get_db()` FastAPI dependency — session-per-request pattern. Pool size configured via `DB_POOL_SIZE` env var.
 - **Pinecone Namespace Convention (Ticket Q&A):** `f"{user_id}:{session_id}"` — enforced at both write and query time in the RAG service. No cross-session or cross-user reads possible.
-- **Pinecone Namespace Convention (Project Knowledge Base):** `f"{user_id}:knowledge"` — user-scoped knowledge base for Confluence docs, related stories, and project artifacts.
+- **Project Aggregate:** *(amended 2026-08-23 — [maintenance record](../implementation-artifacts/maintenance-2026-08-23-projects-and-credential-scoping.md))* `projects` is the container above sessions. A project holds its own Jira / Confluence / GitHub settings and a default model; `sessions.project_id` is NOT NULL and `knowledge_sources.project_id` is nullable (a source can predate a project, or fail before embedding).
+- **Pinecone Namespace Convention (Project Knowledge Base):** `f"{user_id}:{project_id}:knowledge"` — **per project**, via `knowledge_service.knowledge_namespace()`. Never built inline. `project_id=None` yields the pre-projects `f"{user_id}:knowledge"`, which exists only so `scripts/migrate_knowledge_vectors.py` can copy that data forward.
 - **Storage Strategy:** Supabase Storage with bucket policies scoped per `user_id`. Buckets: `reports` (PDF/CSV), `feature-files` (uploaded .feature files), `artifacts` (test artifacts).
 - **Caching:** No caching layer at MVP. Supabase PostgreSQL is the single source of truth. Deferred to Phase 2.
 
 ### Authentication & Security
 
 - **JWT Validation:** Reusable `get_current_user` FastAPI dependency decodes Supabase-issued JWTs using Supabase JWKS. Applied via `Depends(get_current_user)` on all protected routes. Unauthenticated requests → HTTP 401.
-- **Credential Storage (Jira/GitHub PATs):** Stored encrypted in Supabase `user_credentials` table (encrypted at rest by Supabase managed platform). Fetched server-side only — never returned to the frontend in any API response.
+- **Credential Storage (Jira/Confluence/GitHub PATs):** *(amended 2026-08-23 — [maintenance record](../implementation-artifacts/maintenance-2026-08-23-projects-and-credential-scoping.md))* Stored as Fernet ciphertext on `projects`, keyed by `CREDENTIAL_ENCRYPTION_KEY` held **outside** the database. The `user_credentials` table this originally specified was never built. **Encrypted, not hashed** — these tokens are replayed to their APIs, so the plaintext must be recoverable; a hash would store fine and never authenticate. Never returned to the frontend in any form: responses carry `has_*_token` booleans only, and writes follow omit-keeps / empty-clears / text-replaces.
 - **Supabase RLS:** Row Level Security policies enforce that every SELECT/INSERT/UPDATE/DELETE on user data tables is scoped to the authenticated `user_id`.
 - **Supabase Storage Policies:** Bucket-level policies enforce per-`user_id` access to uploaded and generated files.
 
@@ -181,20 +182,46 @@ npm install axios @tanstack/react-query @tanstack/react-query-devtools
 - **FastAPI Data Calls → axios + TanStack React Query:** All calls to the Python backend go through typed `axios` instances configured in `src/lib/api/axiosClient.ts`. Data fetching and mutations are wrapped in TanStack React Query hooks in `src/lib/hooks/` (e.g. `useSession()`, `useBDDGeneration()`, `useVerificationResults()`). This provides automatic caching, background refetching, and loading/error states.
 - **Progress State Management:** For the current Epic 1 flow, long-running operations use standard axios requests plus component/context loading state. Streaming remains a future option for chat or verification if progressive output becomes necessary.
 - **No raw fetch/axios calls in components:** Components consume hooks only — never call API endpoints directly.
+- **Design tokens are the styling contract (2026-08-22):** All colour, radius and
+  type come from semantic CSS variables in `src/app/globals.css` (`--pass`,
+  `--fail`, `--pending`, `--keyword`, `--rule`, `--surface`, …), defined twice —
+  light on `:root`, dark on `.dark`. The shadcn/base-ui variable contract is
+  preserved and remapped onto them. **Hard-coded Tailwind colour utilities
+  (`slate-*`, `sky-*`, `emerald-*`, `rose-*`) are prohibited in components** —
+  they are what left the dark palette unreachable before the redesign.
+- **Provider order:** `ThemeProvider` → `QueryProvider` → `ToastProvider` →
+  `SessionProvider`, set in `src/app/layout.tsx`. `themeInitScript` is inlined in
+  `<head>` so the stored theme paints before first paint.
+- **Transient feedback → `useToast()`:** Action outcomes raise a toast from the
+  hook or handler that owns the action (e.g. `useRunVerification` toasts the
+  verification verdict summary). Inline banners are retained for state that
+  belongs to a form or must survive a reload; toasts are additive.
+- **Shared UI primitives:** New UI composes `components/ui/*`
+  (`Panel`, `Field`, `Badge`/`VerdictBadge`, `EmptyState`/`ErrorState`, the
+  loader family) and `components/layout/*` (`AppNav`, `PageHeader`,
+  `ThemeToggle`) rather than re-deriving markup per page.
+- **Component tests render through `src/test/test-utils.tsx`,** which re-exports
+  React Testing Library with a `render` pre-wrapped in `ThemeProvider` +
+  `ToastProvider`. Importing `render` straight from `@testing-library/react`
+  throws for any component that calls `useToast()` or `useTheme()`.
 
 ### Model Architecture
 
 - **General-Purpose LLM:** Used for verification (code analysis + reasoning), RAG Q&A chat responses, and as a fallback for BDD generation. Accessed via `LLMProvider` abstract interface.
 - **Fine-Tuned Model (BDD Generation):** A domain-specific model trained on story-to-test-case pairs. Accessed via a separate `BDDModelProvider` interface. When unavailable, the system falls back to the general-purpose LLM via the `LLMProvider` interface.
-- **Model Selection:** Configured via `BDD_MODEL_PROVIDER` env var (`fine_tuned` | `general_llm`). The `bdd_service.py` reads this and routes to the appropriate provider.
+- **Model Selection:** *(amended 2026-08-23 — [maintenance record](../implementation-artifacts/maintenance-2026-08-23-runtime-model-selection.md))* Chosen **per request**, not per process. Every LLM-backed request carries `llm_provider` / `llm_model` (`LLMSelectionMixin`), and BDD generation additionally carries `bdd_model_provider`. `LLM_PROVIDER` / `LLM_MODEL` / `BDD_MODEL_PROVIDER` are the fallback for callers with no request behind them (the evaluation runner, background jobs). A project supplies the UI default; the user can still override it per action.
+- **Provider Capability:** `LLMProvider.supports_tools` declares whether `generate_with_tools` is really implemented. Agentic verification is built entirely on it and must refuse a tool-less provider **up front** — the per-scenario error handler otherwise reports a completed run that verified nothing.
+- **Embeddings are NOT selectable.** `text-embedding-3-small` (1536-d) is fixed for the whole system: vectors from different models occupy different spaces, the index dimension is fixed, and Anthropic has no embeddings API. Resolved via `api_key_for("openai")`, independent of which provider answers questions.
 
 ### Infrastructure & Deployment
 
 - **Local Development:** Single `docker compose up` orchestrates: Next.js dev server, FastAPI + Uvicorn, Supabase local emulator. Shared `.env` file at repo root.
 - **CI/CD:** GitHub Actions — `lint-and-test.yml` runs on every PR: Ruff + Pytest (backend), ESLint + TypeScript type-check (frontend). Deployment pipeline deferred to Phase 2.
-- **LLM Provider Abstraction:** `LLMProvider` abstract base class in `app/services/llm/provider.py`. Concrete implementations: `ClaudeProvider`, `OpenAIProvider`. Instantiated by factory function reading `LLM_PROVIDER` env var. No direct SDK calls in business logic ever.
-- **BDD Model Provider Abstraction:** `BDDModelProvider` abstract base class in `app/services/bdd_model/provider.py`. Concrete implementations: `FineTunedModelProvider`, `GeneralLLMFallbackProvider`. Instantiated by factory function reading `BDD_MODEL_PROVIDER` env var.
-- **Storage Service:** `StorageService` in `app/services/storage_service.py` wrapping Supabase Storage SDK. All file upload/download/delete operations go through this service.
+- **LLM Provider Abstraction:** `LLMProvider` abstract base class in `app/services/llm/provider.py`. Concrete implementations: `ClaudeProvider`, `OpenAIProvider`, `OllamaProvider`. `get_llm_provider(provider, model)` takes the selection as **arguments**, falling back to `LLM_PROVIDER` / `LLM_MODEL`. Keys are resolved per vendor by `api_key_for()` — `OPENAI_API_KEY` / `ANTHROPIC_API_KEY`, one variable per vendor with **no** shared fallback, so a key can never stand in for another vendor's. No direct SDK calls in business logic ever.
+- **BDD Model Provider Abstraction:** `BDDModelProvider` abstract base class in `app/services/bdd_model/provider.py`. Concrete implementations: `FineTunedModelProvider`, `GeneralLLMFallbackProvider`. `get_bdd_model_provider(provider=...)` takes the choice as an argument, falling back to `BDD_MODEL_PROVIDER`. It no longer mutates a global setting to select one — a leaked value made every later call in the process evaluate the wrong model, and concurrent callers could not use it at all.
+- **Integration Credential Resolution:** `app/services/project_config_service.py` is the ONLY place the project-vs-environment decision is made. Resolution is **all-or-nothing per integration**: a project supplies its whole credential set or none of it, so a project base URL is never paired with an environment token.
+- **Storage Service:** `StorageService` in `app/services/storage_service.py` wrapping Supabase Storage SDK. All file upload/download/delete operations go through this service. Manually uploaded training corpora (Story 6.7) use a dedicated folder alongside `reports/`, `feature-files/` and `artifacts/`.
+- **Training-Data Governance:** *(amended 2026-08-23 — [maintenance record](../implementation-artifacts/maintenance-2026-08-23-training-data-loop.md))* `TRAINING_DATA_OPT_IN` (default `true`) is the deployment policy. Each BDD write path also accepts a per-request `training_opt_in`, and the two are **ANDed** — a client can only ever NARROW the policy, never widen it. The result is stamped onto each row **at write time**, never evaluated at dataset-build time; consent belongs to the moment of capture. An absent flag inherits the deployment policy (fail-closed), not "yes".
 
 ### Decision Priority Analysis
 
@@ -211,7 +238,8 @@ npm install axios @tanstack/react-query @tanstack/react-query-devtools
 - Deployment pipeline and hosting finalization
 - Async DB operations at scale (connection pooling hardening)
 - MCP server integration (Phase 2 — use direct REST API for MVP)
-- Fine-tuned model training pipeline infrastructure
+- Fine-tuned model training compute (runs on external GPU — Kaggle/Colab; datasets and configs are versioned in `training/`)
+- Fine-tuned model **serving** — **DECIDED 2026-08-09 (Story 6.2): local-only for research; not served in production.** `BDD_MODEL_PROVIDER` stays `general_llm`, which is what every user is served. The model is real and integrated end to end — a Qwen2.5-7B QLoRA adapter (eval loss 0.3976) at `training/outputs/outputs/bdd-lora/`, converted to GGUF and served via Ollama behind `training/serve/`, verified with `effective=fine_tuned` — but it measures **45s per generation against a 12s budget** on non-GPU hardware, and production is `t3.small` (no GPU). Renting a GPU is not justified until Story 6.3 shows the fine-tune actually beats the general LLM; [prd.md:187](prd.md#L187) already carries that contingency. Reversing the decision is two env vars. Procedure and rationale: [training/serve/README.md](../../training/serve/README.md). Note that training-data **capture** is NOT deferred (Story 6.4) — pairs cannot be captured retroactively.
 
 ## Implementation Patterns & Consistency Rules
 
@@ -348,16 +376,32 @@ qe-agent-v2/                          ← Monorepo root
 │       │   └── actions/
 │       │       └── auth.ts           ← Server Actions: signIn, signOut, signUp
 │       ├── components/
-│       │   ├── ui/                   ← shadcn/ui base components
+│       │   ├── ui/                   ← shadcn/base-ui primitives, token-driven
+│       │   │   ├── button.tsx        ← variants + `loading` (aria-busy)
+│       │   │   ├── toast.tsx         ← ToastProvider / useToast / portalled Toaster
+│       │   │   ├── loaders.tsx       ← Spinner, RunSpinner, Skeleton*, ProgressBar
+│       │   │   ├── panel.tsx         ← Panel / PanelHeader / PanelBody
+│       │   │   ├── field.tsx         ← Input / Textarea / Label / Field
+│       │   │   ├── badge.tsx         ← Badge / VerdictBadge (glyph + colour)
+│       │   │   ├── empty-state.tsx   ← EmptyState / ErrorState
+│       │   │   └── confirm-modal.tsx ← portalled destructive confirmation
 │       │   ├── pipeline/
-│       │   │   ├── PipelineStepper.tsx
-│       │   │   ├── TerminalProgressLog.tsx
-│       │   │   ├── BDDEditorPanel.tsx
+│       │   │   ├── TerminalProgressLog.tsx  ← pipeline stages + live SSE log tail
+│       │   │   ├── BDDEditorPanel.tsx       ← Monaco, themed light/dark
+│       │   │   ├── GitHubSourceSelector.tsx
+│       │   │   ├── VerificationResultsPanel.tsx
 │       │   │   ├── VerificationResultRow.tsx
-│       │   │   └── RAGContextPanel.tsx  ← NEW: displays RAG retrieval context
+│       │   │   ├── ChatPanel.tsx
+│       │   │   └── RAGContextPanel.tsx      ← displays RAG retrieval context
+│       │   ├── knowledge/ · training/ · evaluation/   ← feature panels
+│       │   ├── auth/
+│       │   │   ├── OAuthButton.tsx
+│       │   │   └── SubmitButton.tsx  ← server-action pending via useFormStatus
 │       │   └── layout/
-│       │       ├── Sidebar.tsx
-│       │       └── Header.tsx
+│       │       ├── AppNav.tsx        ← the single top bar (+ Wordmark)
+│       │       ├── PageHeader.tsx
+│       │       ├── ThemeToggle.tsx   ← light / dark / system
+│       │       └── LogoutButton.tsx
 │       ├── lib/
 │       │   ├── api/
 │       │   │   └── axiosClient.ts    ← axios instance + snake_case→camelCase interceptor
@@ -374,6 +418,11 @@ qe-agent-v2/                          ← Monorepo root
 │       │       └── knowledge.ts      ← NEW: knowledge base types
 │       ├── context/
 │       │   └── SessionContext.tsx    ← In-flight pipeline state
+│       ├── providers/
+│       │   ├── QueryProvider.tsx     ← TanStack Query client
+│       │   └── ThemeProvider.tsx     ← .dark on <html>, themeInitScript, useTheme
+│       ├── test/
+│       │   └── test-utils.tsx        ← RTL render pre-wrapped in app providers
 │       └── middleware.ts             ← Auth guard: redirect unauthenticated users
 │
 └── backend/                          ← FastAPI Python service (uv init output)

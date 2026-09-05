@@ -4,6 +4,7 @@ Initializes the FastAPI app, registers routers, and configures
 the global exception handler for consistent error responses.
 """
 
+import asyncio
 import logging
 import sys
 from collections.abc import AsyncGenerator
@@ -25,12 +26,45 @@ from fastapi.responses import JSONResponse
 
 from app.api.v1.api import api_router
 from app.core.config import settings
+from app.services import training_run_service
+
+logger = logging.getLogger(__name__)
+
+#: How long startup will wait on the orphaned-run reconciliation before giving
+#: up on it. Generous for the single UPDATE it performs, and short enough that
+#: an unreachable database costs seconds rather than asyncpg's 60s connect
+#: timeout.
+_STARTUP_RECONCILE_TIMEOUT_SECONDS = 10
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     """Application lifespan manager for startup/shutdown events."""
     # Startup
+    #
+    # A training run lives in a detached task and a subprocess, and neither
+    # survives this process exiting. Its ROW does, so a restart mid-run leaves
+    # it active forever and the one-at-a-time guard then refuses every later
+    # run. Startup is the one moment we know none of our workers is running.
+    #
+    # Never fatal, and never slow. Before this, startup touched no database at
+    # all: the app bound its port immediately and /health answered even with
+    # the database down. Reconciling is not worth giving that up — a container
+    # that does not bind fast enough fails its health check and gets killed —
+    # so it is bounded as well as guarded. The only cost of skipping is a row
+    # left active, which the next successful startup clears.
+    try:
+        await asyncio.wait_for(
+            training_run_service.abandon_orphaned_runs(),
+            timeout=_STARTUP_RECONCILE_TIMEOUT_SECONDS,
+        )
+    except TimeoutError:
+        logger.warning(
+            "Timed out reconciling orphaned training runs; starting anyway"
+        )
+    except Exception:
+        logger.exception("Could not reconcile orphaned training runs at startup")
+
     yield
     # Shutdown
 
@@ -96,7 +130,10 @@ def create_app() -> FastAPI:
                 "error": "VALIDATION_ERROR",
                 "message": "Invalid request payload or parameters",
                 "code": 422,
-                "details": exc.errors(),
+                "details": [
+                    {k: v for k, v in err.items() if k not in ("ctx", "url")}
+                    for err in exc.errors()
+                ],
             },
         )
 

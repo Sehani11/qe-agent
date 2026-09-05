@@ -2,7 +2,7 @@
 stepsCompleted: [1, 2, 3, 4]
 status: 'complete'
 completedAt: '2026-03-08'
-lastUpdated: '2026-04-05'
+lastUpdated: '2026-08-22'
 inputDocuments: 
   - _bmad-output/planning-artifacts/prd.md
   - _bmad-output/planning-artifacts/architecture.md
@@ -11,6 +11,10 @@ inputDocuments:
 changeLog:
   - date: '2026-03-15'
     description: 'Updated for UPDATED_SCOPE.md: added Epic 5 (Project Knowledge Base & RAG Enrichment), added Epic 6 (Fine-Tuned Model Integration), expanded Epic 3 verification stories with implementation suggestions and RAG context, added new FRs (FR35-FR46), updated FR coverage map'
+  - date: '2026-08-08'
+    description: 'Epic 6 expanded: renamed to Fine-Tuned Model Training & Integration; added Story 6.4 (Training Data Capture, ships early), 6.5 (Fine-Tuning Dataset & Model Training), 6.6 (Training-Data Opt-Out Control) and 6.7 (Manual Training Dataset Upload). Execution order is 6.4 → 6.6 → 6.7 → 6.5 → 6.2 → 6.3, which is not numeric order.'
+  - date: '2026-08-22'
+    description: 'Epic 6: added Story 6.8 (Product-Domain Training Corpus) and Story 6.9 (Model Comparison UI & Saved Evaluation Runs), both post-hoc. The work shipped 2026-08-16/17 outside the BMAD workflow and was documented retrospectively; their acceptance criteria are a reconstruction of what the implementation had to satisfy, not criteria agreed in advance.'
   - date: '2026-04-05'
     description: 'Reordered epics: Epic 2 is now GitHub Code Verification (no auth, DEV_USER_ID stub), Epic 3 is Auth & Session Persistence, Epic 4 is Knowledge Base & RAG Enrichment, Epic 5 is RAG Chat & Traceability Reporting. Story numbers updated throughout.'
 ---
@@ -184,11 +188,12 @@ Allow users to interrogate ingested Jira tickets through a RAG-powered chatbot (
 **FRs covered:** FR9, FR10, FR11, FR12, FR28, FR29, FR30, FR45, FR46
 **Note:** This epic contains two independent story tracks (RAG chatbot and Report generation) that can be developed in parallel — they share no code.
 
-### Epic 6: Fine-Tuned Model Integration (Phase 2)
-Integrate a fine-tuned domain-specific model for BDD test case generation, with a provider abstraction that allows seamless switching between the fine-tuned model and the general-purpose LLM. Includes evaluation pipeline for systematic comparison.
+### Epic 6: Fine-Tuned Model Training & Integration (Phase 2)
+Capture real story-to-test-case training pairs, train a fine-tuned domain-specific model for BDD test case generation, and integrate it behind a provider abstraction that allows seamless switching between the fine-tuned model and the general-purpose LLM. Includes evaluation pipeline for systematic comparison.
 **FRs covered:** FR13, FR14 (enhanced)
-**Dependencies:** Epic 1 (BDD generation API must exist), model training infrastructure (external)
-**Note:** This epic is Phase 2 scope. The general LLM continues to serve BDD generation in MVP. The `BDDModelProvider` abstraction is set up early so that the fine-tuned model can be plugged in when ready.
+**Dependencies:** Epic 1 (BDD generation API must exist). Model training runs on external GPU compute (Kaggle/Colab); all datasets, configs and scripts are versioned in this repo.
+**Note:** This epic is Phase 2 scope and the general LLM continues to serve BDD generation in MVP — **except Story 6.4, which should ship early**. Training pairs cannot be captured retroactively, so every release without it permanently loses data. The `BDDModelProvider` abstraction (6.1) is already in place.
+**Execution order:** 6.4 → 6.6 → 6.7 → 6.5 → 6.2 → 6.3 → 6.9 → 6.8 (not numeric order; see sprint-status.yaml). 6.8 and 6.9 were added post-hoc on 2026-08-22 for work that shipped 2026-08-16/17 outside the BMAD workflow.
 
 ---
 
@@ -618,6 +623,32 @@ So that I can share verification evidence with stakeholders and attach it to PRs
 
 ---
 
+### Story 5.5: Project Knowledge Base Q&A (General RAG Chat)
+
+> **Context (added post-hoc):** Stories 5.1/5.2 built a chat scoped to a single ingested Jira ticket (`{user_id}:{session_id}`). This story adds a **project-wide** chat over the Epic 4 knowledge base (`{user_id}:knowledge`) so users can ask questions across all their ingested Confluence pages, Jira workspace tickets, and uploaded documents — not just one ticket. Reuses the Epic 4 retrieval (`query_knowledge_base`) and the 5.1 streaming pattern.
+
+As an **authenticated user**,
+I want to ask natural-language questions about my whole project and get answers grounded in my ingested knowledge base,
+So that I can quickly understand project context (architecture, related work, docs) without opening a specific ticket.
+
+**Acceptance Criteria:**
+
+**Given** an authenticated user has ingested project knowledge (Confluence/Jira/documents) into `{user_id}:knowledge`
+**When** a POST request is made to `/api/v1/chat/knowledge` with a `question`
+**Then** the FastAPI service retrieves the top-K relevant chunks from the user's knowledge namespace via `knowledge_service.query_knowledge_base` and grounds the LLM strictly in them (no ticket/session scoping)
+
+**And** the answer streams as SSE `data: {"type": "token", ...}`, followed by a `data: {"type": "sources", ...}` event listing the knowledge sources used, then `data: {"type": "complete"}`
+**And** the LLM is called only via the `LLMProvider` interface, at low temperature, with a grounding prompt that forbids answers outside the retrieved context (graceful "not in the knowledge base" when empty)
+**And** the endpoint requires authentication and is **not** scoped to a session; it is stateless (no chat history persisted, since there is no session to anchor to)
+**And** retrieval degrades gracefully (empty context) when Pinecone is unconfigured or times out — the endpoint never 500s on retrieval failure
+
+**And given** the user opens the Knowledge Base screen (`/knowledge`)
+**When** they type a question into the "Ask about your project" chat and send
+**Then** a `KnowledgeChatPanel` streams the answer token-by-token via `useKnowledgeChat` (`useSSEStream`) and renders the cited sources as clickable chips (Confluence/Jira links open in a new tab)
+**And** the chat is read-only on mobile viewports (desktop-first, mirroring the ticket chat)
+
+---
+
 ## Epic 4: Project Knowledge Base & RAG Enrichment
 
 Enable ingestion of project knowledge sources into the vector database, and integrate contextual RAG retrieval into the verification pipeline to enrich LLM analysis with real project knowledge.
@@ -698,12 +729,128 @@ So that I can understand and trust the context behind the LLM's analysis.
 
 ---
 
-## Epic 6: Fine-Tuned Model Integration (Phase 2)
+### Story 4.5: Knowledge Base Ingestion UI
+
+As an **authenticated user**,
+I want a UI to connect and ingest Confluence pages and Jira workspace tickets into my knowledge base,
+So that I can populate the RAG knowledge base from the app without calling the API manually.
+
+> **Context:** Stories 4.1/4.2 built the ingestion endpoints (`POST /api/v1/knowledge/ingest/confluence` and `/jira`) and the frontend hooks (`useIngestConfluence`, `useIngestJira`) API-only — no screen was ever specced. This story surfaces that capability in the UI.
+
+**Acceptance Criteria:**
+
+**Given** an authenticated user opens the Knowledge Base ingestion UI (a panel/section reachable from the app)
+**When** they submit the Confluence form (space key *or* page ID) or the Jira form (project key + optional sprint/label filters)
+**Then** the existing `useIngestConfluence` / `useIngestJira` hooks POST to the SSE ingest endpoints and stream live progress (pages/tickets processed, current/total) using the established progress-log pattern
+
+**And** the final `complete` event shows the ingested count, and `error` events surface an actionable message (never a silent failure) (NFR-R1)
+**And** a list of previously ingested knowledge sources for the user is displayed (source type, title, URL, ingestion status, date) — backed by a `GET /api/v1/knowledge/sources` endpoint returning `KnowledgeSourceResponse` rows scoped to the current user (NFR-S8)
+**And** when Pinecone or the relevant credentials are not configured, the UI shows a clear informational state rather than appearing broken
+**And** form inputs are validated client-side (e.g. Jira `project_key` matches the backend's uppercase-alphanumeric rule) before submitting
+
+---
+
+### Story 4.6: Document Upload Knowledge Ingestion (PDF / DOCX)
+
+As an **authenticated user**,
+I want to upload PDF and DOCX documents into my knowledge base (alongside Confluence and Jira),
+So that project docs that don't live in Confluence/Jira can still enrich RAG verification.
+
+> **Context:** Extends the knowledge base (4.1 Confluence, 4.2 Jira, 4.5 UI) with a third ingestion source: direct file upload. Reuses the same chunk → embed → Pinecone `{user_id}:knowledge` pipeline and the `knowledge_sources` tracking table.
+
+**Acceptance Criteria:**
+
+**Given** an authenticated user uploads a `.pdf` or `.docx` file via a new "Documents" option in the Knowledge Base UI
+**When** a multipart POST is made to `/api/v1/knowledge/ingest/document`
+**Then** the backend extracts text (PDF via `pypdf`, DOCX via `python-docx`), chunks it with the existing `chunk_text`, embeds via `_embed_chunks`, and upserts into Pinecone namespace `{user_id}:knowledge` with `source="document"` and `title=<filename>` (FR39, FR40, NFR-S8)
+
+**And** a `knowledge_sources` row is recorded with `source_type="document"`, `title=<filename>`, `source_url=null`, and the chunk/page count
+**And** unsupported file types are rejected with a clear 422, and oversize files with a 413 (reuse the BDD-upload size guard pattern)
+**And** the ingested document appears in the existing "Ingested sources" list and its chunks are retrievable during verification (the RAG context panel shows it as a `document` source)
+**And** the UI validates file type (`.pdf`/`.docx`) and size client-side before uploading, and shows progress + success/error states consistent with the Confluence/Jira forms
+
+---
+
+### Story 4.8: Per-Scenario RAG Retrieval & Verification Toggle
+
+> **Context (added post-hoc):** Story 4.3 enriches verification with knowledge-base context, but retrieved it **once** using the whole BDD blob and shared those chunks across every scenario. This story makes retrieval **per-scenario** (each scenario queries the KB with its own Gherkin + AC text, in parallel) for more relevant context and more accurate verdicts, and adds an env toggle to disable KB enrichment entirely.
+
+As an **authenticated user**,
+I want each BDD scenario verified against the knowledge-base context most relevant to *that* scenario, and the ability to turn knowledge-base enrichment off,
+So that verdicts are more accurate, and I can verify against the ticket/code alone when I don't want the knowledge base to influence results.
+
+**Acceptance Criteria:**
+
+**Given** verification runs for a session with multiple BDD scenarios and a populated knowledge base
+**When** the verification service assembles each scenario's prompt
+**Then** it retrieves the top-K relevant knowledge chunks **per scenario** (querying with that scenario's own Gherkin/AC text), running the retrievals in parallel, and includes each scenario's own chunks in its LLM prompt (FR35, FR41)
+
+**And** each verdict's persisted `rag_context` reflects the chunks retrieved for **that** scenario (no longer a single shared payload) — surfaced per-row in the RAG context panel and the traceability report
+**And** retrieval stays within the NFR-P6 budget (parallelized) and degrades gracefully to no-enrichment when the knowledge base is empty or Pinecone is unavailable
+
+**And given** the `VERIFICATION_RAG_ENABLED` env var is set to `false`
+**When** verification runs
+**Then** the knowledge base is **not** queried at all, no `PROJECT CONTEXT` is added to prompts, and every verdict's `rag_context` is `null` (verify against ticket/code only)
+**And** the toggle defaults to `true` (enrichment on) when unset
+
+---
+
+### Story 4.9: Knowledge-Base Opt-In for Verification (Agentic RAG + Checkbox)
+
+> **Context (added post-hoc):** Stories 4.3/4.8 added knowledge-base RAG to `verification_service.run_verification` (the `/run` endpoint), but the UI verifies via `/run-agentic` (`agentic_verification_service`), which had **no** RAG — so the knowledge base never influenced real verifications. This story adds per-scenario RAG to the agentic path and replaces the deploy-wide `VERIFICATION_RAG_ENABLED` env var with a **per-run user choice** (a checkbox at verify time, default off).
+
+As an **authenticated user**,
+I want a checkbox at verification time to decide whether to enrich the run with my project knowledge base,
+So that I control—per run—whether Confluence/Jira/document context influences the verdicts, defaulting to code-only verification.
+
+**Acceptance Criteria:**
+
+**Given** the user is on the verification step
+**When** the verification controls render
+**Then** a "Use project knowledge base" checkbox is shown, **unchecked by default**, and its value is sent as `use_knowledge_base` on the verification request
+
+**And** when the box is checked, the agentic verification retrieves per-scenario knowledge-base context (reusing the Story 4.8 batched retrieval) and includes it in each scenario's LLM prompt, and each verdict's `rag_context` is populated and persisted (surfaced in the RAG context panel and the traceability report)
+**And** when the box is unchecked (default), the knowledge base is **not** queried, no context is added to prompts, and every verdict's `rag_context` is `null`
+**And** the gating is a per-request flag on both `/run` and `/run-agentic` — the `VERIFICATION_RAG_ENABLED` env var is removed
+**And** retrieval degrades gracefully (empty context) when the KB is empty or Pinecone is unavailable, and stays within the NFR-P6 budget
+
+---
+
+### Story 4.7: Delete Ingested Knowledge Sources
+
+> **Context (added post-hoc):** Stories 4.1/4.2/4.6 ingest Confluence/Jira/document sources into Pinecone (`{user_id}:knowledge`) and track each in `knowledge_sources`, and 4.5 lists them — but there was no way to remove one. This story adds deletion of both the DB row and the source's vectors, so stale/incorrect knowledge stops influencing RAG verification and the project chat (Story 5.5).
+
+As an **authenticated user**,
+I want to delete a knowledge source I previously ingested,
+So that outdated or incorrect project knowledge no longer influences verification or project Q&A.
+
+**Acceptance Criteria:**
+
+**Given** an authenticated user has ingested knowledge sources listed in the Knowledge Base UI
+**When** they click delete on a source and confirm
+**Then** a `DELETE /api/v1/knowledge/sources/{id}` request removes the source's vectors from the `{user_id}:knowledge` Pinecone namespace **and** deletes the `knowledge_sources` row, returning 204
+
+**And** only the owner can delete a source — 404 for a missing source, 403 for another user's source (NFR-S8)
+**And** vector deletion targets exactly that source's chunks (via a persisted `source_ref` = the Pinecone vector-id prefix: page id / ticket id / document uuid), stored on ingest for Confluence, Jira, and document sources
+**And** a vector-store failure is logged but does not block removing the DB row (best-effort; the row always disappears from the UI so the user isn't stuck)
+**And** the ingested-sources list updates immediately after deletion (the `["knowledge","sources"]` query is invalidated), with a per-row pending state and a confirmation prompt before deleting
+
+---
+
+## Epic 6: Fine-Tuned Model Training & Integration (Phase 2)
 
 
-Integrate a fine-tuned domain-specific model for BDD test case generation, with a provider abstraction that allows seamless switching between the fine-tuned model and the general-purpose LLM.
+Capture real story-to-test-case training pairs, train a fine-tuned domain-specific model for BDD test case generation, and integrate it behind a provider abstraction that allows seamless switching between the fine-tuned model and the general-purpose LLM.
 
 > **Note:** This is Phase 2 scope. The `BDDModelProvider` abstraction interface is set up early (Story 6.1) so that the fine-tuned model can be plugged in when the trained model is available. The general LLM continues to serve BDD generation in MVP via `GeneralLLMFallbackProvider`.
+>
+> **Story 6.4 is the exception to "Phase 2".** It captures the training pairs that Stories 6.5 and 6.3 depend on, and that data cannot be recovered after the fact — acceptance criteria are not persisted and editor corrections are discarded. Ship it with MVP even though the model itself is Phase 2.
+>
+> **Serving is an open decision, and Story 6.2 owns all of it.** Production is `t3.small` (no GPU) and cannot host a 7B model. Story 6.5 produces a LoRA adapter and a contract-complete shim; **converting that adapter into a servable artifact and proving an end-to-end request belongs to 6.2**, along with the production hosting decision. Story 6.3 evaluates locally via Ollama against the artifact 6.2 produces — it needs the conversion, not the production decision. *(Boundary corrected 2026-08-09 — see sprint-change-proposal-2026-08-09.md.)*
+>
+> **Execution order:** 6.4 → 6.6 → 6.7 → 6.5 → 6.2 → 6.3 → 6.9 → 6.8 (not numeric order; see sprint-status.yaml). Governance (6.6) lands before more data accumulates, and the manual uploader (6.7) supplies the corpus that training (6.5) consumes — the database currently holds only 2 human-authored rows.
+>
+> **6.8 and 6.9 were added post-hoc on 2026-08-22**, for work that shipped 2026-08-16/17 outside the BMAD workflow. They follow 6.3 because both build on what it measured: 6.9 exposes its runner and metrics over HTTP, and 6.8 acts on its central finding — *fine-tuning worked; it learned the wrong corpus* — by adding hand-authored product-domain pairs. Their acceptance criteria are a reconstruction, not criteria agreed in advance.
 
 ### Story 6.1: BDD Model Provider Abstraction
 
@@ -732,12 +879,14 @@ So that BDD scenarios are generated by a domain-specific model trained on real s
 
 **Acceptance Criteria:**
 
-**Given** a fine-tuned model is deployed and accessible via HTTP endpoint
-**When** `BDD_MODEL_PROVIDER=fine_tuned` and a BDD generation request is processed
-**Then** the `FineTunedModelProvider` sends the acceptance criteria to the fine-tuned model endpoint and parses the response into Gherkin scenarios
+**Given** Story 6.5's LoRA adapter exists at `training/outputs/outputs/bdd-lora/`
+**When** it is converted to a servable artifact and exposed over HTTP with `BDD_MODEL_PROVIDER=fine_tuned`
+**Then** the `FineTunedModelProvider` sends the acceptance criteria to that endpoint and parses the response into Gherkin scenarios
 
+**And** the conversion from PEFT adapter to servable artifact is documented and reproducible — Story 6.3 consumes the same artifact for local evaluation
+**And** the shim reports `chat_template.status == "match"` on `/health`, proving serving applies the template the model was trained with
 **And** if the fine-tuned model endpoint is unavailable, the system falls back to `GeneralLLMFallbackProvider` with a warning log
-**And** BDD generation via the fine-tuned model completes within 30 seconds for up to 20 AC clauses (NFR-P3)
+**And** a BDD generation request served by the fine-tuned model returns a valid `BDDGenerateResponse` within `FINE_TUNED_MODEL_TIMEOUT_SECONDS` — **12s**, per `backend/app/core/config.py:43`, not the 30s previously written here; 12s is a deliberate sub-budget so the general-LLM fallback still completes inside NFR-P3's 30s
 **And** the response format is identical to the general LLM output — no frontend changes required
 
 ---
@@ -757,3 +906,126 @@ So that I can measure and validate the fine-tuning improvement with quantitative
 **And** results are stored in the database linked to model version and ticket ID for longitudinal tracking
 **And** the evaluation can be triggered via a management command (`python -m app.evaluate_models`)
 **And** a summary report is generated comparing the two model outputs side-by-side
+
+---
+
+### Story 6.4: Training Data Capture
+
+As a **researcher**,
+I want every BDD generation to persist its input acceptance criteria and any human corrections,
+So that a dataset of real story-to-test-case pairs accumulates from normal usage.
+
+**Acceptance Criteria:**
+
+**Given** a BDD generation request succeeds
+**When** the resulting `bdd_files` row is written
+**Then** the acceptance criteria text that produced it is persisted and linked to that row, forming a retrievable input→output pair
+
+**And** when a user edits generated BDD in the editor and saves, a row is persisted with `source='edited'` that references the originating generated row, preserving both versions
+**And** existing `generated` and `uploaded` behaviour is unchanged — no regression to Epic 1 flows
+**And** an Alembic migration adds the new column(s) with RLS and per-user isolation preserved (NFR-S6)
+**And** Pytest tests verify AC persistence, that an edited save creates a distinct row, and that the original generated content survives
+
+---
+
+### Story 6.5: Fine-Tuning Dataset & Model Training
+
+As a **researcher**,
+I want a reproducible dataset build and training run,
+So that a fine-tuned BDD model exists for Story 6.2 to integrate and Story 6.3 to evaluate.
+
+**Acceptance Criteria:**
+
+**Given** a corpus of `.feature` files and/or captured `bdd_files` rows
+**When** `training/build_dataset.py` runs
+**Then** it emits `train.jsonl` / `holdout.jsonl` in chat format, every target validated against `BDDGenerateResponse`, empty scenario arrays rejected, and the split taken by origin file so no scenario appears on both sides
+
+**And** the training configuration is committed under `training/` and completes on free-tier GPU (Kaggle/Colab), producing a LoRA adapter
+**And** training dependencies are NOT added to `backend/pyproject.toml` — they would ship in the production image via the Dockerfile's `COPY . .`
+**And** the run is documented (base model, hyperparameters, dataset size, eval loss) so it can be reproduced
+**And** a serving shim exists under `training/serve/` implementing the exact contract `FineTunedModelProvider` sends — `{acceptance_criteria, system_prompt, response_format}` in, `BDDGenerateResponse`-shaped JSON out — validated before responding and bounded inside `FINE_TUNED_MODEL_TIMEOUT_SECONDS`, with tests proving the contract and the output guarantee
+**And** the chat template the run trained with is persisted beside the adapter so that serving can be verified against it — *end-to-end serving of the trained model is Story 6.2's, which owns the serving decision*
+
+---
+
+### Story 6.6: Training-Data Opt-Out Control
+
+As an **operator**,
+I want an environment switch that marks captured data as excluded from model training,
+So that a deployment can keep its session history for debugging without that content ever feeding a fine-tune.
+
+**Acceptance Criteria:**
+
+**Given** `TRAINING_DATA_OPT_IN` is set to `false`
+**When** a BDD generation or an editor correction is persisted
+**Then** the row is still written in full (history and debugging are unaffected) but is flagged as excluded from training
+
+**And** when `TRAINING_DATA_OPT_IN` is `true` (the default, preserving today's behaviour) rows are flagged as usable for training
+**And** the flag is stamped **at write time**, not evaluated at build time — consent belongs to the moment of capture, so flipping the env var later must never retroactively change the status of existing rows
+**And** `training/build_dataset.py --from-db` excludes flagged-out rows, and reports how many it skipped so a silently empty corpus is never mistaken for a missing database
+**And** an Alembic migration adds the column, defaulting existing rows to opted-in (they were captured under the current always-on behaviour)
+**And** the env var is wired into all four surfaces: `.env.example`, `docker-compose.yml`, and `BACKEND_ENV_KEYS` in both `cfn/setup-infra.sh` and `cfn/deploy-backend.sh`
+**And** Pytest tests verify both settings produce the correct flag, and that the dataset builder filters on it
+
+---
+
+### Story 6.7: Manual Training Dataset Upload
+
+As a **researcher**,
+I want to upload my own `.feature` files or JSONL datasets through the app,
+So that a fine-tune can be trained now rather than waiting months for captured corrections to accumulate.
+
+**Acceptance Criteria:**
+
+**Given** an authenticated user on the training-data page
+**When** they upload one or more `.feature` files or a `.jsonl` dataset
+**Then** each file is validated, stored in Supabase Storage under a dedicated training-data folder via the existing `StorageService`, and recorded in the database scoped to that user
+
+**And** uploaded `.feature` files are parsed and rejected with a clear message if they contain no usable scenario (Feature + at least one Given/When/Then), so a corpus of unusable files cannot silently accumulate
+**And** uploaded `.jsonl` files are validated line by line against the training-pair shape, reporting the first offending line number rather than a generic failure
+**And** the page lists what has been uploaded (filename, type, scenario/pair count, upload date) and supports deleting an entry, removing both the database row and the stored object — mirroring the ingested-sources list from Story 4.7
+**And** `training/build_dataset.py` can read this uploaded corpus as a source alongside `--features-dir` and `--from-db`
+**And** uploads are user-scoped: a user can only list and delete their own, enforced in the route layer
+**And** backend Pytest tests cover accept, reject-invalid, list, delete and cross-user 403; frontend tests cover upload, list render, and delete
+
+---
+
+> **Stories 6.8 and 6.9 were added post-hoc on 2026-08-22.** Both shipped on 2026-08-16/17 outside the BMAD workflow. The acceptance criteria below are a **reconstruction** of what the implemented work had to satisfy, recovered from `training/RUN_LOG.md`, the shipped code and the commit history — they were not agreed before implementation, and should not be read as if they were. Detail lives in the story files.
+
+### Story 6.8: Product-Domain Training Corpus
+
+As a **researcher**,
+I want a training corpus written in the product's own domain rather than testing-framework Gherkin,
+So that the fine-tune learns to reason about behaviour instead of learning the shape of `rspec` invocations.
+
+**Acceptance Criteria:**
+
+**Given** `RUN_LOG.md` has recorded since Run 1 that 84% of the corpus is Gherkin about running CLI commands, and Run 2 established that more data of the same kind changes nothing
+**When** product-domain pairs are authored
+**Then** both sides of every pair — the acceptance criteria and the Gherkin — are hand-written in reviewable YAML under `training/corpus-product/` with **no LLM involved**, because an LLM-written target would train the fine-tune to imitate the general model it is meant to beat
+
+**And** `training/build_product_pairs.py` compiles that YAML into the exact JSONL shape `build_dataset.py --pairs-dir` consumes, validating every target against `BDDGenerateResponse` and embedding the same `BDD_SYSTEM_PROMPT` the serving path sends
+**And** `build_dataset.py --pairs-dir` merges an existing dataset without paying for back-generation twice, with the pre-merge dataset preserved at `training/data-v1/`
+**And** a `--check` mode validates the YAML without writing, so an authoring error is caught before a training run
+**And** the merged dataset is trained and recorded in `RUN_LOG.md` with the **holdout split by domain group** — an aggregate over a holdout that is still ~85% legacy corpus hides the effect of the new data entirely
+**And** the sample size is stated plainly: three product-domain holdout items is a signal, not a result
+
+### Story 6.9: Model Comparison UI & Saved Evaluation Runs
+
+As a **researcher**,
+I want to run and review fine-tuned vs. general-LLM comparisons from inside the app,
+So that the evaluation is reproducible by someone who does not run the CLI, and a run can be re-read after the terminal session that produced it is gone.
+
+**Acceptance Criteria:**
+
+**Given** an authenticated user supplies a Jira ticket ID or pasted acceptance criteria
+**When** `POST /api/v1/evaluation/compare` is called
+**Then** both providers generate for that input and each result is scored with **the same `evaluation_metrics` functions the batch CLI uses**, so the API and `app.evaluate_models` cannot drift into measuring different things
+
+**And** every result carries `configured_provider`, `effective_provider`, `fallback_reason` and `model_identifier`, so a silently degraded generation is visible in the UI rather than merely counted
+**And** the comparison route passes `allow_fallback=False` explicitly — this caller is measuring, and an explicit argument outranks `FINE_TUNED_ALLOW_FALLBACK`, so no configuration change can re-enable a silent fallback underneath it
+**And** `POST /evaluation/runs` batches several tickets under a caller-supplied `run_id` and returns a per-item outcome, so one unresolvable ticket does not discard the batch
+**And** `GET /evaluation/runs`, `GET /evaluation/report` and `DELETE /evaluation/runs/{run_id}` list, summarise and delete saved runs, each scoped to `user_id` in the query itself
+**And** the report excludes degraded rows from every average and counts them separately; omitting `run_id` pools every saved run
+**And** the general LLM runs before the fine-tuned model, so the slow column is the only thing left pending in the UI
+**And** `/comparison` hosts `ModelComparisonPanel` (single side-by-side comparison) and `SavedRunsPanel` (run list, report, delete)

@@ -1,6 +1,11 @@
 # Story 3.5: Session History Dashboard
 
+> **Amended 2026-08-23** ([maintenance record](maintenance-2026-08-23-projects-and-credential-scoping.md)): `GET /api/v1/sessions` accepts `project_id`, applied to BOTH the count and the page — filtering only the page would leave the pager sized for every project. The dashboard shows the active project's sessions and refetches on a project switch.
+
+
 Status: done
+
+> **Amended 2026-08-22** ([maintenance record](maintenance-2026-08-22-verification-and-rag-hardening.md)): `GET /sessions` is now paginated — `limit`/`offset` params and an `{items, total, limit, offset}` envelope replace the bare array — and `bdd_status` gained the `"edited"` value (POST /bdd/save writes it; the old literal 500'd the whole list). The dashboard renders Previous/Next paging and an Edited badge.
 
 <!-- Note: Validation is optional. Run validate-create-story for quality check before dev-story. -->
 

@@ -1,0 +1,772 @@
+<title>QE Verification Agent — Architecture Figures</title>
+
+<style>
+  :root {
+    --ground:   #F5F6F7;
+    --panel:    #EBEFF1;
+    --surface:  #FFFFFF;
+    --ink:      #161A1D;
+    --muted:    #5E6A73;
+    --line:     #D3DADE;
+    --line-2:   #8E9BA3;
+    --accent:   #0C6F79;
+    --fail:     #A03F2B;
+    --pass:     #2B6B50;
+
+    --serif: "Iowan Old Style", "Palatino Linotype", Palatino, Georgia, "Times New Roman", serif;
+    --sans: system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+    --mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, "Liberation Mono", monospace;
+  }
+
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --ground:  #131719;
+      --panel:   #1D2327;
+      --surface: #1A1F22;
+      --ink:     #E4E9EC;
+      --muted:   #94A1A9;
+      --line:    #2E363B;
+      --line-2:  #6C7A83;
+      --accent:  #4BBCC6;
+      --fail:    #DC8570;
+      --pass:    #63A98A;
+    }
+  }
+
+  :root[data-theme="dark"] {
+    --ground:  #131719;
+    --panel:   #1D2327;
+    --surface: #1A1F22;
+    --ink:     #E4E9EC;
+    --muted:   #94A1A9;
+    --line:    #2E363B;
+    --line-2:  #6C7A83;
+    --accent:  #4BBCC6;
+    --fail:    #DC8570;
+    --pass:    #63A98A;
+  }
+
+  body {
+    background: var(--ground);
+    color: var(--ink);
+    font-family: var(--sans);
+    font-size: 16px;
+    line-height: 1.6;
+    margin: 0;
+    padding: 0 24px 96px;
+  }
+
+  .wrap { max-width: 1080px; margin: 0 auto; }
+
+  header.page {
+    padding: 64px 0 40px;
+    border-bottom: 1px solid var(--line);
+    margin-bottom: 8px;
+  }
+  .eyebrow {
+    font-size: 11px;
+    font-weight: 600;
+    letter-spacing: 0.14em;
+    color: var(--muted);
+    margin: 0 0 14px;
+  }
+  header.page h1 {
+    font-family: var(--serif);
+    font-size: clamp(28px, 4vw, 40px);
+    font-weight: 400;
+    line-height: 1.15;
+    letter-spacing: -0.01em;
+    text-wrap: balance;
+    margin: 0 0 16px;
+  }
+  header.page p {
+    max-width: 62ch;
+    color: var(--muted);
+    font-size: 15px;
+    margin: 0;
+  }
+
+  .conventions {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 10px 28px;
+    margin: 28px 0 0;
+    padding: 16px 20px;
+    background: var(--panel);
+    border: 1px solid var(--line);
+    border-radius: 4px;
+    font-size: 13px;
+    color: var(--muted);
+  }
+  .conventions b { color: var(--ink); font-weight: 600; }
+  .swatch {
+    display: inline-block;
+    width: 22px; height: 2px;
+    background: var(--accent);
+    vertical-align: middle;
+    margin-right: 6px;
+  }
+  .swatch.dash {
+    background: repeating-linear-gradient(90deg, var(--accent) 0 5px, transparent 5px 9px);
+  }
+
+  figure {
+    margin: 0;
+    padding: 52px 0 44px;
+    border-bottom: 1px solid var(--line);
+  }
+  figure:last-of-type { border-bottom: 0; }
+
+  .fig-head { margin-bottom: 26px; }
+  .fig-num {
+    font-family: var(--mono);
+    font-size: 11px;
+    letter-spacing: 0.1em;
+    color: var(--accent);
+    font-weight: 600;
+    display: block;
+    margin-bottom: 6px;
+  }
+  .fig-head h2 {
+    font-family: var(--serif);
+    font-size: 22px;
+    font-weight: 400;
+    margin: 0;
+    letter-spacing: -0.005em;
+    text-wrap: balance;
+  }
+
+  .canvas {
+    overflow-x: auto;
+    background: var(--surface);
+    border: 1px solid var(--line);
+    border-radius: 4px;
+    padding: 20px 22px;
+  }
+  .canvas svg {
+    display: block;
+    width: 100%;
+    min-width: 720px;
+    height: auto;
+    color: var(--ink);
+  }
+
+  figcaption {
+    font-family: var(--serif);
+    font-size: 15px;
+    line-height: 1.65;
+    color: var(--muted);
+    max-width: 74ch;
+    margin-top: 20px;
+  }
+  figcaption strong { color: var(--ink); font-weight: 600; }
+  figcaption code {
+    font-family: var(--mono);
+    font-size: 0.86em;
+    color: var(--ink);
+  }
+
+  footer.page {
+    padding-top: 44px;
+    font-size: 14px;
+    color: var(--muted);
+    max-width: 74ch;
+  }
+  footer.page h3 {
+    font-family: var(--serif);
+    font-weight: 400;
+    font-size: 18px;
+    color: var(--ink);
+    margin: 0 0 12px;
+  }
+  footer.page code { font-family: var(--mono); font-size: 0.86em; color: var(--ink); }
+
+  /* ---- diagram primitives ---- */
+  .b   { fill: var(--surface); stroke: var(--line-2); stroke-width: 1; }
+  .bp  { fill: var(--panel);   stroke: var(--line);   stroke-width: 1; }
+  .ba  { fill: var(--surface); stroke: var(--accent); stroke-width: 1.6; }
+  .bd  { fill: none; stroke: var(--line-2); stroke-width: 1; stroke-dasharray: 5 4; }
+
+  .ln  { fill: none; stroke: var(--line-2); stroke-width: 1.3; }
+  .lna { fill: none; stroke: var(--accent);  stroke-width: 1.7; }
+  .lnd { fill: none; stroke: var(--accent);  stroke-width: 1.5; stroke-dasharray: 5 4; }
+  .rule { stroke: var(--line); stroke-width: 1; }
+
+  text { font-family: var(--sans); }
+  .tb  { font-size: 13px;   font-weight: 600; fill: var(--ink); }
+  .t   { font-size: 12px;   fill: var(--ink); }
+  .s   { font-size: 10.5px; fill: var(--muted); }
+  .m   { font-family: var(--mono); font-size: 10px; fill: var(--muted); }
+  .mi  { font-family: var(--mono); font-size: 10.5px; fill: var(--ink); }
+  .eb  { font-size: 9.5px; font-weight: 700; letter-spacing: 0.1em; fill: var(--muted); }
+  .lb  { font-size: 10px; fill: var(--muted); }
+  .lba { font-size: 10px; font-weight: 600; fill: var(--accent); }
+  .ac  { fill: var(--accent); }
+  .pa  { font-size: 10.5px; font-weight: 700; fill: var(--pass); }
+  .fa  { font-size: 10.5px; font-weight: 700; fill: var(--fail); }
+</style>
+
+<div class="wrap">
+
+<header class="page">
+  <p class="eyebrow">QE VERIFICATION AGENT · SYSTEM FIGURES</p>
+  <h1>Architecture of an acceptance-criteria-to-code traceability framework</h1>
+  <p>Six figures covering the deployed architecture, the traceability mechanism the research
+  contributes, and the three design decisions the argument turns on: agentic code retrieval,
+  the dual-model substitution seam, and per-scenario knowledge retrieval.</p>
+
+  <div class="conventions">
+    <span><b>Solid arrow</b> — request or data flow</span>
+    <span><span class="swatch dash"></span><b>Dashed</b> — conditional path</span>
+    <span><span class="swatch"></span><b>Teal</b> — the mechanism under discussion</span>
+    <span><b>Mono type</b> — identifiers as they appear in the system</span>
+  </div>
+</header>
+
+
+<!-- ============================== FIGURE 1 ============================== -->
+<figure>
+  <div class="fig-head">
+    <span class="fig-num">FIGURE 1</span>
+    <h2>Layered system architecture</h2>
+  </div>
+
+  <div class="canvas">
+  <svg viewBox="0 0 1000 660" role="img"
+       aria-label="Layered architecture: a Next.js client calls a FastAPI service over authenticated HTTPS; the service layer holds business logic and reaches external integration APIs; two independent model abstractions sit beneath it and reach hosted and local model endpoints; three data stores sit below.">
+    <defs>
+      <marker id="f1a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+        <path d="M0,1 L9,5 L0,9 z" fill="var(--line-2)"/>
+      </marker>
+    </defs>
+
+    <!-- L1 CLIENT -->
+    <rect class="bp" x="32" y="40" width="600" height="76" rx="3"/>
+    <text class="eb" x="44" y="60">CLIENT · NEXT.JS APP ROUTER</text>
+    <rect class="b" x="44" y="72" width="138" height="32" rx="2"/>
+    <text class="t" x="113" y="92" text-anchor="middle">Pipeline workspace</text>
+    <rect class="b" x="190" y="72" width="138" height="32" rx="2"/>
+    <text class="t" x="259" y="92" text-anchor="middle">Knowledge base</text>
+    <rect class="b" x="336" y="72" width="138" height="32" rx="2"/>
+    <text class="t" x="405" y="92" text-anchor="middle">Session history</text>
+    <rect class="b" x="482" y="72" width="138" height="32" rx="2"/>
+    <text class="t" x="551" y="92" text-anchor="middle">Auth (server actions)</text>
+
+    <line class="ln" x1="332" y1="116" x2="332" y2="146" marker-end="url(#f1a)"/>
+    <text class="lb" x="342" y="136">JWT · HTTPS</text>
+
+    <!-- L2 API -->
+    <rect class="bp" x="32" y="150" width="600" height="90" rx="3"/>
+    <text class="eb" x="44" y="170">API · FASTAPI /api/v1</text>
+    <text class="lb" x="620" y="170" text-anchor="end">401 without a valid token</text>
+    <rect class="b" x="44" y="182" width="90" height="30" rx="2"/>
+    <text class="s" x="89" y="201" text-anchor="middle">ingestion</text>
+    <rect class="b" x="142" y="182" width="90" height="30" rx="2"/>
+    <text class="s" x="187" y="201" text-anchor="middle">bdd</text>
+    <rect class="b" x="240" y="182" width="90" height="30" rx="2"/>
+    <text class="s" x="285" y="201" text-anchor="middle">verification</text>
+    <rect class="b" x="338" y="182" width="90" height="30" rx="2"/>
+    <text class="s" x="383" y="201" text-anchor="middle">knowledge</text>
+    <rect class="b" x="436" y="182" width="90" height="30" rx="2"/>
+    <text class="s" x="481" y="201" text-anchor="middle">chat</text>
+    <rect class="b" x="534" y="182" width="90" height="30" rx="2"/>
+    <text class="s" x="579" y="201" text-anchor="middle">reports</text>
+    <text class="m" x="44" y="230">every route guarded by get_current_user · also: sessions, training</text>
+
+    <line class="ln" x1="332" y1="240" x2="332" y2="270" marker-end="url(#f1a)"/>
+
+    <!-- L3 SERVICES -->
+    <rect class="bp" x="32" y="270" width="600" height="104" rx="3"/>
+    <text class="eb" x="44" y="290">SERVICES · BUSINESS LOGIC</text>
+    <rect class="b" x="44" y="300" width="138" height="30" rx="2"/>
+    <text class="s" x="113" y="319" text-anchor="middle">jira</text>
+    <rect class="b" x="190" y="300" width="138" height="30" rx="2"/>
+    <text class="s" x="259" y="319" text-anchor="middle">github + tools</text>
+    <rect class="b" x="336" y="300" width="138" height="30" rx="2"/>
+    <text class="s" x="405" y="319" text-anchor="middle">bdd</text>
+    <rect class="b" x="482" y="300" width="138" height="30" rx="2"/>
+    <text class="s" x="551" y="319" text-anchor="middle">agentic verification</text>
+    <rect class="b" x="44" y="336" width="138" height="30" rx="2"/>
+    <text class="s" x="113" y="355" text-anchor="middle">knowledge (RAG)</text>
+    <rect class="b" x="190" y="336" width="138" height="30" rx="2"/>
+    <text class="s" x="259" y="355" text-anchor="middle">chat</text>
+    <rect class="b" x="336" y="336" width="138" height="30" rx="2"/>
+    <text class="s" x="405" y="355" text-anchor="middle">report</text>
+    <rect class="b" x="482" y="336" width="138" height="30" rx="2"/>
+    <text class="s" x="551" y="355" text-anchor="middle">storage · training</text>
+
+    <!-- integrations -->
+    <rect class="bp" x="700" y="270" width="268" height="104" rx="3"/>
+    <text class="eb" x="712" y="290">INTEGRATION APIs</text>
+    <rect class="b" x="712" y="300" width="244" height="20" rx="2"/>
+    <text class="s" x="722" y="314">Jira REST v3</text>
+    <rect class="b" x="712" y="324" width="244" height="20" rx="2"/>
+    <text class="s" x="722" y="338">GitHub REST (contents / trees / PR)</text>
+    <rect class="b" x="712" y="348" width="244" height="20" rx="2"/>
+    <text class="s" x="722" y="362">Confluence REST</text>
+
+    <line class="ln" x1="632" y1="322" x2="700" y2="322" marker-end="url(#f1a)"/>
+    <text class="lb" x="666" y="314" text-anchor="middle">fetch</text>
+
+    <line class="ln" x1="332" y1="374" x2="332" y2="404" marker-end="url(#f1a)"/>
+    <polyline class="ln" points="76,374 76,524" marker-end="url(#f1a)"/>
+    <text class="lb" x="84" y="452">persist</text>
+
+    <!-- L4 MODEL ABSTRACTIONS -->
+    <rect class="bp" x="140" y="404" width="492" height="92" rx="3"/>
+    <text class="eb" x="152" y="424">MODEL ABSTRACTIONS</text>
+    <rect class="ba" x="152" y="434" width="226" height="50" rx="2"/>
+    <text class="mi" x="164" y="454">LLMProvider</text>
+    <text class="s" x="164" y="471">verification · chat · fallback</text>
+    <rect class="ba" x="394" y="434" width="226" height="50" rx="2"/>
+    <text class="mi" x="406" y="454">BDDModelProvider</text>
+    <text class="s" x="406" y="471">scenario generation</text>
+
+    <!-- model endpoints -->
+    <rect class="bp" x="700" y="404" width="268" height="92" rx="3"/>
+    <text class="eb" x="712" y="424">MODEL ENDPOINTS</text>
+    <rect class="b" x="712" y="432" width="244" height="26" rx="2"/>
+    <text class="s" x="722" y="449">Claude · OpenAI (hosted)</text>
+    <rect class="b" x="712" y="462" width="244" height="26" rx="2"/>
+    <text class="s" x="722" y="479">Ollama + LoRA adapter (local)</text>
+
+    <line class="ln" x1="632" y1="450" x2="700" y2="450" marker-end="url(#f1a)"/>
+    <text class="lb" x="666" y="442" text-anchor="middle">invoke</text>
+
+    <!-- L5 DATA -->
+    <rect class="bp" x="32" y="524" width="936" height="104" rx="3"/>
+    <text class="eb" x="44" y="544">DATA STORES</text>
+    <rect class="b" x="44" y="556" width="296" height="56" rx="2"/>
+    <text class="tb" x="58" y="578">PostgreSQL</text>
+    <text class="s" x="58" y="596">row-level security per user_id</text>
+    <rect class="b" x="354" y="556" width="296" height="56" rx="2"/>
+    <text class="tb" x="368" y="578">Pinecone</text>
+    <text class="m" x="368" y="596">{user}:{session} · {user}:knowledge</text>
+    <rect class="b" x="664" y="556" width="296" height="56" rx="2"/>
+    <text class="tb" x="678" y="578">Object storage</text>
+    <text class="s" x="678" y="596">reports · feature files · corpora</text>
+  </svg>
+  </div>
+
+  <figcaption>The client never holds an integration credential and never calls an external
+  API directly; every outbound call originates in the service layer. <strong>Two independent
+  model abstractions</strong> (teal) separate the two roles language models play in the system —
+  <code>LLMProvider</code> for verification and question answering, <code>BDDModelProvider</code>
+  for scenario generation. Their independence is what allows the generation model to be
+  substituted for the comparative study without touching the verification path.</figcaption>
+</figure>
+
+
+<!-- ============================== FIGURE 2 ============================== -->
+<figure>
+  <div class="fig-head">
+    <span class="fig-num">FIGURE 2</span>
+    <h2>The traceability thread: a clause identifier carried across every artefact</h2>
+  </div>
+
+  <div class="canvas">
+  <svg viewBox="0 0 1000 330" role="img"
+       aria-label="An acceptance criterion clause identifier propagates from the Jira issue into each generated scenario, through its verification verdict, and into a row of the traceability report. Clause AC-2 fans out into two scenarios and is highlighted through the whole chain.">
+    <defs>
+      <marker id="f2a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+        <path d="M0,1 L9,5 L0,9 z" fill="var(--line-2)"/>
+      </marker>
+      <marker id="f2b" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+        <path d="M0,1 L9,5 L0,9 z" fill="var(--accent)"/>
+      </marker>
+    </defs>
+
+    <text class="eb" x="32" y="34">ACCEPTANCE CRITERIA</text>
+    <line class="rule" x1="32" y1="46" x2="212" y2="46"/>
+    <text class="eb" x="272" y="34">GENERATED SCENARIOS</text>
+    <line class="rule" x1="272" y1="46" x2="472" y2="46"/>
+    <text class="eb" x="512" y="34">VERIFICATION VERDICTS</text>
+    <line class="rule" x1="512" y1="46" x2="712" y2="46"/>
+    <text class="eb" x="752" y="34">TRACEABILITY REPORT</text>
+    <line class="rule" x1="752" y1="46" x2="968" y2="46"/>
+
+    <!-- clauses -->
+    <rect class="b" x="32" y="86" width="180" height="44" rx="2"/>
+    <text class="tb" x="44" y="105">AC-1</text>
+    <text class="s" x="44" y="121">user requests reset link</text>
+    <rect class="ba" x="32" y="161" width="180" height="44" rx="2"/>
+    <text class="tb ac" x="44" y="180">AC-2</text>
+    <text class="s" x="44" y="196">link over 1 h is rejected</text>
+    <rect class="b" x="32" y="236" width="180" height="44" rx="2"/>
+    <text class="tb" x="44" y="255">AC-3</text>
+    <text class="s" x="44" y="271">reset consumes the link</text>
+
+    <!-- clause -> scenario -->
+    <line class="ln"  x1="212" y1="108" x2="272" y2="108" marker-end="url(#f2a)"/>
+    <line class="lna" x1="212" y1="178" x2="272" y2="158" marker-end="url(#f2b)"/>
+    <line class="lna" x1="212" y1="188" x2="272" y2="208" marker-end="url(#f2b)"/>
+    <line class="ln"  x1="212" y1="258" x2="272" y2="258" marker-end="url(#f2a)"/>
+    <text class="lba" x="242" y="146" text-anchor="middle">one clause,</text>
+    <text class="lba" x="242" y="230" text-anchor="middle">two scenarios</text>
+
+    <!-- scenarios -->
+    <rect class="b" x="272" y="86" width="200" height="44" rx="2"/>
+    <text class="t" x="284" y="105">Scenario 1</text>
+    <text class="m" x="284" y="121">source_ac_clause: AC-1</text>
+    <rect class="ba" x="272" y="136" width="200" height="44" rx="2"/>
+    <text class="t" x="284" y="155">Scenario 2</text>
+    <text class="m" x="284" y="171">source_ac_clause: AC-2</text>
+    <rect class="ba" x="272" y="186" width="200" height="44" rx="2"/>
+    <text class="t" x="284" y="205">Scenario 3</text>
+    <text class="m" x="284" y="221">source_ac_clause: AC-2</text>
+    <rect class="b" x="272" y="236" width="200" height="44" rx="2"/>
+    <text class="t" x="284" y="255">Scenario 4</text>
+    <text class="m" x="284" y="271">source_ac_clause: AC-3</text>
+
+    <line class="ln"  x1="472" y1="108" x2="512" y2="108" marker-end="url(#f2a)"/>
+    <line class="lna" x1="472" y1="158" x2="512" y2="158" marker-end="url(#f2b)"/>
+    <line class="lna" x1="472" y1="208" x2="512" y2="208" marker-end="url(#f2b)"/>
+    <line class="ln"  x1="472" y1="258" x2="512" y2="258" marker-end="url(#f2a)"/>
+
+    <!-- verdicts -->
+    <rect class="b" x="512" y="86" width="200" height="44" rx="2"/>
+    <text class="pa" x="524" y="105">PASS</text>
+    <text class="m" x="524" y="121">reset.py · request_link L44</text>
+    <rect class="ba" x="512" y="136" width="200" height="44" rx="2"/>
+    <text class="pa" x="524" y="155">PASS</text>
+    <text class="m" x="524" y="171">token.py · issue L88</text>
+    <rect class="ba" x="512" y="186" width="200" height="44" rx="2"/>
+    <text class="fa" x="524" y="205">FAIL</text>
+    <text class="m" x="524" y="221">no expiry branch found</text>
+    <rect class="b" x="512" y="236" width="200" height="44" rx="2"/>
+    <text class="pa" x="524" y="255">PASS</text>
+    <text class="m" x="524" y="271">auth.py · consume L61</text>
+
+    <line class="ln"  x1="712" y1="108" x2="752" y2="108" marker-end="url(#f2a)"/>
+    <line class="lna" x1="712" y1="158" x2="752" y2="158" marker-end="url(#f2b)"/>
+    <line class="lna" x1="712" y1="208" x2="752" y2="208" marker-end="url(#f2b)"/>
+    <line class="ln"  x1="712" y1="258" x2="752" y2="258" marker-end="url(#f2a)"/>
+
+    <!-- report -->
+    <rect class="b" x="752" y="86" width="216" height="194" rx="2"/>
+    <line class="rule" x1="752" y1="133" x2="968" y2="133"/>
+    <line class="rule" x1="752" y1="183" x2="968" y2="183"/>
+    <line class="rule" x1="752" y1="233" x2="968" y2="233"/>
+    <text class="m" x="764" y="106">AC-1 · S1 · pass</text>
+    <text class="s" x="764" y="122">justification + code ref</text>
+    <text class="m ac" x="764" y="156">AC-2 · S2 · pass</text>
+    <text class="s" x="764" y="172">justification + code ref</text>
+    <text class="m ac" x="764" y="206">AC-2 · S3 · fail</text>
+    <text class="s" x="764" y="222">+ implementation suggestion</text>
+    <text class="m" x="764" y="256">AC-3 · S4 · pass</text>
+    <text class="s" x="764" y="272">justification + code ref</text>
+  </svg>
+  </div>
+
+  <figcaption>The clause identifier is emitted by the generating model as a validated field,
+  <strong>not recovered afterwards by parsing prose</strong>. Because it travels intact through
+  generation, verification and reporting, a failing verdict is attributable to a specific
+  requirement — and the coverage metric used in the model evaluation is computable at all.
+  A single clause may produce several scenarios (AC-2, teal), and the report preserves that
+  one-to-many relation rather than collapsing it.</figcaption>
+</figure>
+
+
+<!-- ============================== FIGURE 3 ============================== -->
+<figure>
+  <div class="fig-head">
+    <span class="fig-num">FIGURE 3</span>
+    <h2>Agentic verification of one scenario, with the evidence guard</h2>
+  </div>
+
+  <div class="canvas">
+  <svg viewBox="0 0 1000 440" role="img"
+       aria-label="One BDD scenario enters a bounded agent loop of at most ten tool rounds; the agent calls search, directory listing and file reading tools against the GitHub API, then passes an evidence guard. If at least one file read succeeded a verdict is issued; if none succeeded the scenario is failed as incompletely verified.">
+    <defs>
+      <marker id="f3a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+        <path d="M0,1 L9,5 L0,9 z" fill="var(--line-2)"/>
+      </marker>
+      <marker id="f3b" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+        <path d="M0,1 L9,5 L0,9 z" fill="var(--accent)"/>
+      </marker>
+    </defs>
+
+    <!-- bounded loop enclosure -->
+    <rect class="bd" x="232" y="80" width="264" height="320" rx="4"/>
+    <text class="lb" x="488" y="74" text-anchor="end">bounded: at most 10 rounds</text>
+
+    <!-- input -->
+    <rect class="b" x="32" y="96" width="168" height="64" rx="2"/>
+    <text class="tb" x="46" y="122">BDD scenario</text>
+    <text class="s" x="46" y="140">one of N, verified alone</text>
+    <line class="ln" x1="200" y1="128" x2="232" y2="128" marker-end="url(#f3a)"/>
+
+    <!-- agent -->
+    <rect class="b" x="248" y="96" width="232" height="64" rx="2"/>
+    <text class="tb" x="262" y="122">Agent reasoning step</text>
+    <text class="s" x="262" y="140">act again, or conclude</text>
+
+    <!-- loop arrows -->
+    <line class="ln" x1="300" y1="160" x2="300" y2="280" marker-end="url(#f3a)"/>
+    <text class="lb" x="308" y="224">call</text>
+    <line class="ln" x1="428" y1="280" x2="428" y2="160" marker-end="url(#f3a)"/>
+    <text class="lb" x="436" y="224">result</text>
+
+    <!-- tools -->
+    <rect class="b" x="248" y="280" width="232" height="104" rx="2"/>
+    <text class="eb" x="262" y="300">TOOLS</text>
+    <rect class="bp" x="262" y="308" width="204" height="20" rx="2"/>
+    <text class="m" x="272" y="322">search_code</text>
+    <rect class="bp" x="262" y="332" width="204" height="20" rx="2"/>
+    <text class="m" x="272" y="346">list_directory</text>
+    <rect class="bp" x="262" y="356" width="204" height="20" rx="2"/>
+    <text class="m" x="272" y="370">get_file_contents</text>
+
+    <!-- github -->
+    <line class="ln" x1="480" y1="332" x2="528" y2="332" marker-start="url(#f3a)" marker-end="url(#f3a)"/>
+    <text class="lb" x="504" y="324" text-anchor="middle">read</text>
+    <rect class="b" x="528" y="300" width="200" height="64" rx="2"/>
+    <text class="tb" x="542" y="326">GitHub REST API</text>
+    <text class="s" x="542" y="344">files · tree · diff · search</text>
+
+    <!-- conclude -->
+    <line class="ln" x1="480" y1="128" x2="528" y2="128" marker-end="url(#f3a)"/>
+    <text class="lb" x="504" y="120" text-anchor="middle">conclude</text>
+
+    <rect class="ba" x="528" y="96" width="200" height="64" rx="2"/>
+    <text class="tb ac" x="542" y="122">Evidence guard</text>
+    <text class="s" x="542" y="140">at least one file actually read?</text>
+
+    <line class="ln" x1="728" y1="128" x2="776" y2="128" marker-end="url(#f3a)"/>
+    <text class="lb" x="752" y="120" text-anchor="middle">yes</text>
+    <rect class="b" x="776" y="96" width="192" height="64" rx="2"/>
+    <text class="tb" x="790" y="122">Verdict</text>
+    <text class="s" x="790" y="140">status · justification · code ref</text>
+
+    <polyline class="lna" points="628,160 628,232 776,232" marker-end="url(#f3b)"/>
+    <text class="lba" x="638" y="224">no read succeeded</text>
+    <rect class="ba" x="776" y="200" width="192" height="64" rx="2"/>
+    <text class="tb ac" x="790" y="226">Forced fail</text>
+    <text class="s" x="790" y="244">incomplete verification</text>
+  </svg>
+  </div>
+
+  <figcaption>Rather than pre-selecting source files, the model requests what it needs and the
+  loop is capped so cost stays bounded. The consequential element is the guard (teal):
+  where no tool call successfully read a file, <strong>the system refuses to issue a
+  supported-looking verdict</strong> and records the scenario as incompletely verified.
+  This makes an ungrounded pass structurally unrepresentable rather than merely discouraged
+  by the prompt, preserving the distinction between <em>the code does not implement this</em>
+  and <em>it could not be established whether it does</em>.</figcaption>
+</figure>
+
+
+<!-- ============================== FIGURE 4 ============================== -->
+<figure>
+  <div class="fig-head">
+    <span class="fig-num">FIGURE 4</span>
+    <h2>Model substitution seam and the silent fallback that instrumentation must expose</h2>
+  </div>
+
+  <div class="canvas">
+  <svg viewBox="0 0 1000 400" role="img"
+       aria-label="The generation service routes through a provider factory selected by an environment variable. One branch reaches hosted general-purpose models; the other reaches a locally served fine-tuned adapter under a twelve second bound. A dashed fallback path returns from the fine-tuned branch to the general branch, and a log line records the configured versus effective provider.">
+    <defs>
+      <marker id="f4a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+        <path d="M0,1 L9,5 L0,9 z" fill="var(--line-2)"/>
+      </marker>
+      <marker id="f4b" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+        <path d="M0,1 L9,5 L0,9 z" fill="var(--accent)"/>
+      </marker>
+    </defs>
+
+    <rect class="b" x="32" y="150" width="176" height="64" rx="2"/>
+    <text class="tb" x="46" y="176">Generation service</text>
+    <text class="s" x="46" y="194">acceptance criteria in</text>
+
+    <line class="ln" x1="208" y1="182" x2="256" y2="182" marker-end="url(#f4a)"/>
+
+    <rect class="ba" x="256" y="142" width="200" height="80" rx="2"/>
+    <text class="tb ac" x="270" y="168">Provider factory</text>
+    <text class="m" x="270" y="186">BDD_MODEL_PROVIDER</text>
+    <text class="s" x="270" y="204">one env var selects the path</text>
+
+    <!-- upper branch: general -->
+    <polyline class="ln" points="456,168 508,168 508,96 560,96" marker-end="url(#f4a)"/>
+    <text class="m" x="462" y="160">general_llm</text>
+    <rect class="b" x="560" y="64" width="184" height="64" rx="2"/>
+    <text class="tb" x="574" y="90">General provider</text>
+    <text class="s" x="574" y="108">production default</text>
+    <line class="ln" x1="744" y1="96" x2="800" y2="96" marker-end="url(#f4a)"/>
+    <rect class="b" x="800" y="64" width="168" height="64" rx="2"/>
+    <text class="tb" x="814" y="90">Claude · OpenAI</text>
+    <text class="s" x="814" y="108">hosted API</text>
+
+    <!-- lower branch: fine-tuned -->
+    <polyline class="ln" points="456,196 508,196 508,264 560,264" marker-end="url(#f4a)"/>
+    <text class="m" x="462" y="212">fine_tuned</text>
+    <rect class="b" x="560" y="232" width="184" height="64" rx="2"/>
+    <text class="tb" x="574" y="258">Serving shim</text>
+    <text class="s" x="574" y="276">12 s bound · schema-checked</text>
+    <line class="ln" x1="744" y1="264" x2="800" y2="264" marker-end="url(#f4a)"/>
+    <rect class="b" x="800" y="232" width="168" height="64" rx="2"/>
+    <text class="tb" x="814" y="258">Ollama</text>
+    <text class="s" x="814" y="276">base + LoRA adapter</text>
+
+    <!-- silent fallback -->
+    <line class="lnd" x1="652" y1="232" x2="652" y2="128" marker-end="url(#f4b)"/>
+    <text class="lba" x="662" y="172">silent fallback</text>
+    <text class="lb" x="662" y="188">timeout · unreachable · malformed</text>
+
+    <!-- observability -->
+    <rect class="bp" x="32" y="316" width="936" height="52" rx="3"/>
+    <text class="eb" x="46" y="336">OBSERVABILITY</text>
+    <text class="mi" x="200" y="337">configured=fine_tuned  effective=general_llm  reason=timeout</text>
+    <text class="s" x="46" y="356">Because fallback output is indistinguishable in form, this record is the only reliable evidence of which model answered.</text>
+  </svg>
+  </div>
+
+  <figcaption>Building the substitution seam <strong>before any fine-tuned model existed</strong>
+  reduced the comparative study to a configuration change, so the comparison ran through the
+  production code path rather than a parallel experimental one. The dashed fallback (teal) is
+  what protects users from the experiment — and simultaneously the reason the log line matters:
+  an evaluation run at the production 12-second bound would have fallen back on every call and
+  compared the general model against itself while appearing to compare two systems.</figcaption>
+</figure>
+
+
+<!-- ============================== FIGURE 5 ============================== -->
+<figure>
+  <div class="fig-head">
+    <span class="fig-num">FIGURE 5</span>
+    <h2>Retrieval granularity: one shared query per run versus one query per scenario</h2>
+  </div>
+
+  <div class="canvas">
+  <svg viewBox="0 0 1000 320" role="img"
+       aria-label="Two panels compared. On the left, the initial design issues a single knowledge base query using the whole scenario document and shares the returned chunks across all scenarios. On the right, the adopted design issues one query per scenario using that scenario's own text, with embeddings batched and queries parallelised.">
+    <defs>
+      <marker id="f5a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+        <path d="M0,1 L9,5 L0,9 z" fill="var(--line-2)"/>
+      </marker>
+      <marker id="f5b" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+        <path d="M0,1 L9,5 L0,9 z" fill="var(--accent)"/>
+      </marker>
+    </defs>
+
+    <text class="eb" x="32" y="34">INITIAL DESIGN · SHARED RETRIEVAL</text>
+    <line class="rule" x1="32" y1="46" x2="468" y2="46"/>
+    <text class="eb ac" x="532" y="34">ADOPTED DESIGN · PER-SCENARIO RETRIEVAL</text>
+    <line class="rule" x1="532" y1="46" x2="968" y2="46"/>
+
+    <!-- left panel -->
+    <rect class="b" x="44" y="146" width="130" height="56" rx="2"/>
+    <text class="t" x="58" y="170">Scenarios</text>
+    <text class="s" x="58" y="188">S1 · S2 · S3</text>
+
+    <line class="ln" x1="174" y1="160" x2="310" y2="160" marker-end="url(#f5a)"/>
+    <text class="lb" x="242" y="152" text-anchor="middle">1 query · whole document</text>
+    <line class="ln" x1="310" y1="190" x2="174" y2="190" marker-end="url(#f5a)"/>
+    <text class="lb" x="242" y="208" text-anchor="middle">same chunks to all</text>
+
+    <rect class="b" x="310" y="146" width="150" height="56" rx="2"/>
+    <text class="t" x="324" y="170">Knowledge base</text>
+    <text class="s" x="324" y="188">top-K + similarity floor</text>
+
+    <text class="s" x="44" y="256">Context relevant to one scenario is supplied to all,</text>
+    <text class="s" x="44" y="272">diluting each scenario&#8217;s prompt.</text>
+
+    <!-- right panel -->
+    <rect class="ba" x="532" y="110" width="130" height="36" rx="2"/>
+    <text class="t" x="546" y="133">Scenario 1</text>
+    <rect class="ba" x="532" y="156" width="130" height="36" rx="2"/>
+    <text class="t" x="546" y="179">Scenario 2</text>
+    <rect class="ba" x="532" y="202" width="130" height="36" rx="2"/>
+    <text class="t" x="546" y="225">Scenario 3</text>
+
+    <line class="lna" x1="662" y1="128" x2="798" y2="132" marker-start="url(#f5b)" marker-end="url(#f5b)"/>
+    <line class="lna" x1="662" y1="174" x2="798" y2="174" marker-start="url(#f5b)" marker-end="url(#f5b)"/>
+    <line class="lna" x1="662" y1="220" x2="798" y2="216" marker-start="url(#f5b)" marker-end="url(#f5b)"/>
+    <text class="lba" x="730" y="100" text-anchor="middle">one query each, own text</text>
+
+    <rect class="b" x="798" y="110" width="150" height="128" rx="2"/>
+    <text class="t" x="812" y="134">Knowledge base</text>
+    <text class="s" x="812" y="152">top-K per query</text>
+    <text class="s" x="812" y="170">+ similarity floor</text>
+    <line class="rule" x1="798" y1="186" x2="948" y2="186"/>
+    <text class="s" x="812" y="206">embeddings batched</text>
+    <text class="s" x="812" y="224">queries in parallel</text>
+
+    <text class="s" x="532" y="256">Each scenario is prompted with the context retrieved for it,</text>
+    <text class="s" x="532" y="272">at no proportional cost in elapsed time.</text>
+  </svg>
+  </div>
+
+  <figcaption>Verdicts are issued per scenario, so retrieval should be selected per scenario;
+  the initial arrangement mismatched the two granularities. Batching the embedding request and
+  issuing the similarity queries concurrently is what keeps the refinement from costing elapsed
+  time in proportion to scenario count. Whether enrichment runs at all is a
+  <strong>per-run user choice, disabled by default</strong> — which additionally affords a paired
+  design in which the same session is verified twice under otherwise identical conditions.</figcaption>
+</figure>
+
+
+<!-- ============================== FIGURE 6 ============================== -->
+<figure>
+  <div class="fig-head">
+    <span class="fig-num">FIGURE 6</span>
+    <h2>Tenant isolation enforced independently at each store</h2>
+  </div>
+
+  <div class="canvas">
+  <svg viewBox="0 0 1000 300" role="img"
+       aria-label="An authenticated request passes an application-layer ownership check, then reaches three data stores, each of which enforces tenant isolation by its own unrelated mechanism: row-level security in PostgreSQL, namespace scoping in Pinecone, and bucket policy in object storage.">
+    <defs>
+      <marker id="f6a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+        <path d="M0,1 L9,5 L0,9 z" fill="var(--line-2)"/>
+      </marker>
+    </defs>
+
+    <rect class="b" x="64" y="112" width="170" height="64" rx="2"/>
+    <text class="tb" x="78" y="138">Request</text>
+    <text class="s" x="78" y="156">signed token</text>
+
+    <line class="ln" x1="234" y1="144" x2="294" y2="144" marker-end="url(#f6a)"/>
+
+    <rect class="b" x="294" y="112" width="210" height="64" rx="2"/>
+    <text class="tb" x="308" y="138">Ownership check</text>
+    <text class="s" x="308" y="156">application layer</text>
+
+    <polyline class="ln" points="504,144 552,144 552,62 600,62" marker-end="url(#f6a)"/>
+    <line class="ln" x1="504" y1="144" x2="600" y2="144" marker-end="url(#f6a)"/>
+    <polyline class="ln" points="504,144 552,144 552,226 600,226" marker-end="url(#f6a)"/>
+
+    <rect class="ba" x="600" y="32" width="336" height="60" rx="2"/>
+    <text class="tb" x="614" y="56">PostgreSQL</text>
+    <text class="s" x="614" y="76">row-level security · auth.uid() = user_id</text>
+
+    <rect class="ba" x="600" y="114" width="336" height="60" rx="2"/>
+    <text class="tb" x="614" y="138">Pinecone</text>
+    <text class="m" x="614" y="158">namespace {user_id}:{session_id}</text>
+
+    <rect class="ba" x="600" y="196" width="336" height="60" rx="2"/>
+    <text class="tb" x="614" y="220">Object storage</text>
+    <text class="s" x="614" y="240">bucket policy scoped to user_id</text>
+  </svg>
+  </div>
+
+  <figcaption>The three enforcement mechanisms (teal) are <strong>unrelated to one another</strong>:
+  row-level security does not constrain the vector database, and a namespace convention does not
+  constrain relational queries. Because a tenancy defect discloses one organisation&#8217;s
+  requirements and source code to another silently, without raising an error, isolation is
+  enforced redundantly so that a defect in any single layer is insufficient on its own to cause
+  disclosure. This is the point most often missed in retrieval-augmented systems, where the
+  vector index is treated as an implementation detail rather than as a store holding tenant data.</figcaption>
+</figure>
+
+
+<footer class="page">
+  <h3>Using these in the paper</h3>
+  <p>Each figure is a standalone <code>&lt;svg&gt;</code> element and can be lifted directly
+  from this page&#8217;s source for a LaTeX or Word workflow. Colours are supplied through CSS
+  custom properties so the figures follow the light or dark theme; for a print figure, replace
+  <code>var(--ink)</code>, <code>var(--line-2)</code>, <code>var(--accent)</code> and
+  <code>var(--muted)</code> with literal values before exporting.</p>
+</footer>
+
+</div>

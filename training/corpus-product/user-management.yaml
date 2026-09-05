@@ -1,0 +1,372 @@
+# Product-domain training pairs — User Management
+#
+# SOURCE AND ITS LIMITS — READ THIS BEFORE TRUSTING THE PROVENANCE
+#
+# Derived from E:\Projects\temp\user-mangemetn-server, a small React client:
+# App.jsx fetches a user list from a local server, Components/Users.jsx posts a
+# {name, email} pair and appends the created user to the rendered list. There is
+# no requirements document — the README is the unmodified Vite template.
+#
+# So the provenance here is WEAKER than resume-generator.yaml, which is
+# traceable line by line to a real requirements document. The observable
+# behaviour below (list, create, render, reset the form) comes from the source.
+# The rest — duplicate addresses, validation, the unreachable server, the
+# in-flight state — is the behaviour a real ticket for this feature WOULD
+# specify, written by me. It is realistic, and it is not documented anywhere in
+# that repository.
+#
+# Why include it anyway: the domain is user registration and account listing,
+# which is the closest match in either source repo to the kind of ticket this
+# application is actually given. The failure cases are the point — the existing
+# corpus has almost none, and a model trained only on happy paths writes only
+# happy paths.
+#
+# If provenance matters for the write-up, cite resume-generator.yaml and label
+# this set as authored-from-observed-behaviour.
+#
+# Format and traceability rules are documented in resume-generator.yaml. The
+# same two rules apply: every `then` states an observable outcome, and every
+# ticket carries at least one failure or edge case.
+
+tickets:
+  - id: UM-001
+    source: "user-mangemetn-server/src/App.jsx, Components/Users.jsx (observed)"
+    feature: User Directory
+    title: List the registered users
+    as_a: administrator
+    i_want: to see every registered user when I open the console
+    so_that: I know who currently has an account
+    description: >-
+      The console loads the user directory when it opens and renders each user's
+      name and email address. The list is fetched once on load rather than per
+      keystroke. While the request is in flight the user must see that loading
+      is happening rather than an empty page that looks like an empty directory,
+      and a failed request must be distinguishable from a genuinely empty one.
+    acceptance_criteria:
+      - The user directory is loaded when the console opens.
+      - Each entry displays the user's name and email address.
+      - A loading state is shown while the request is in flight.
+      - An empty directory and a failed request are shown differently.
+    scenarios:
+      - clause: 1
+        scenario: The directory loads on open
+        given: users are registered on the server
+        when: I open the console
+        then: the directory is requested once and the returned users are rendered
+      - clause: 2
+        scenario: Viewing the directory
+        given: three users are registered
+        when: I open the console
+        then: three entries are listed, each showing that user's name and email address
+      - clause: 3
+        scenario: Loading state while the request is in flight
+        given: the directory request has not yet returned
+        when: I look at the console
+        then: a loading indicator is shown and no empty-directory message appears
+      - clause: 4
+        scenario: An empty directory says so
+        given: no users are registered
+        when: I open the console
+        then: a message states that no users are registered yet
+      - clause: 4
+        scenario: A failed load is reported as a failure
+        given: the server is unreachable
+        when: I open the console
+        then: an error message states that the directory could not be loaded and offers a retry
+
+  - id: UM-002
+    source: "user-mangemetn-server/src/Components/Users.jsx (observed)"
+    feature: User Registration
+    title: Add a user through the console
+    as_a: administrator
+    i_want: to add a user by entering a name and email address
+    so_that: new people can be granted access without a database change
+    description: >-
+      The console provides a form taking a name and an email address. On submit
+      the details are sent to the server, and the user created by the server —
+      not the values typed into the form — is appended to the visible list, so
+      that the server-assigned identifier is the one held by the client. The
+      form is cleared once the user has been created successfully, and only
+      then, so that a failed submission does not lose what was typed.
+    acceptance_criteria:
+      - The administrator can submit a name and an email address to create a user.
+      - The record returned by the server is what gets appended to the visible list.
+      - The list updates without the page being reloaded.
+      - The form is cleared only after the user has been created successfully.
+    scenarios:
+      - clause: 1
+        scenario: Adding a user
+        given: I am viewing the console with two users listed
+        when: I submit a name and an email address
+        then: a third entry appears showing the name and address I submitted
+      - clause: 2
+        scenario: The server-assigned identifier is kept
+        given: the server assigns an identifier when it creates a user
+        when: my submission succeeds
+        then: the appended entry carries the identifier returned by the server
+      - clause: 3
+        scenario: The list updates in place
+        given: I have submitted a new user
+        when: the server confirms the creation
+        then: the new entry appears without the page reloading
+      - clause: 4
+        scenario: A failed submission keeps what was typed
+        given: I have typed a name and an email address
+        when: the server rejects the submission
+        then: the values I typed remain in the form so I can correct and resubmit
+
+  - id: UM-003
+    source: "authored from observed behaviour — not documented in the repository"
+    feature: Registration Validation
+    title: Validate registration details before creating a user
+    as_a: administrator
+    i_want: invalid details rejected with a clear reason
+    so_that: the directory does not fill up with unusable records
+    description: >-
+      Both fields are required, and the email address must be well formed.
+      Validation runs before the request is sent, so an obviously invalid entry
+      costs no round trip, and the server validates again because a client check
+      can be bypassed. The message must name the field at fault rather than
+      reporting a generic failure, and leading or trailing whitespace is trimmed
+      rather than treated as content.
+    acceptance_criteria:
+      - Both the name and the email address are required.
+      - The email address must be well formed before the request is sent.
+      - The error message names the field at fault.
+      - Leading and trailing whitespace is trimmed before validation.
+      - The server validates the submission again even when the client has already checked it.
+    scenarios:
+      - clause: 1
+        scenario: Submitting without a name
+        given: I have entered an email address and left the name empty
+        when: I submit the form
+        then: no user is created and the name field is marked as required
+      - clause: 2
+        scenario: Submitting a malformed address
+        given: I have entered a name and the address "alice.example.com"
+        when: I submit the form
+        then: no request is sent and the message states that the email address is not valid
+      - clause: 3
+        scenario: The message identifies which field failed
+        given: I have submitted the form with a valid name and a malformed address
+        when: the submission is refused
+        then: the message refers to the email address and does not mark the name as at fault
+      - clause: 4
+        scenario: Surrounding whitespace is trimmed
+        given: I have entered a name padded with spaces at both ends
+        when: the user is created
+        then: the stored name has no leading or trailing spaces
+      - clause: 5
+        scenario: The server rejects an invalid address submitted directly
+        given: a request carrying a malformed email address reaches the server
+        when: the server processes it
+        then: the request is rejected and no user record is created
+
+  - id: UM-004
+    source: "authored from observed behaviour — not documented in the repository"
+    feature: Duplicate Account Prevention
+    title: Prevent two accounts sharing an email address
+    as_a: administrator
+    i_want: an email address to identify exactly one user
+    so_that: access cannot be granted twice to the same person
+    description: >-
+      The email address is the identity of an account, so it must be unique
+      across the directory. Comparison ignores case and surrounding whitespace,
+      because an address differing only in capitalisation belongs to the same
+      person. A rejected duplicate must leave the existing record untouched and
+      must say which address is already taken, and the check has to be enforced
+      by the server rather than only by the console.
+    acceptance_criteria:
+      - An email address may belong to only one user.
+      - Addresses are compared ignoring case and surrounding whitespace.
+      - A rejected duplicate leaves the existing user record unchanged.
+      - The message states that the address is already registered.
+    scenarios:
+      - clause: 1
+        scenario: Adding an address that already exists
+        given: a user is registered with the address "alice@example.com"
+        when: I submit another user with the address "alice@example.com"
+        then: no second user is created and the directory still shows one entry for that address
+      - clause: 2
+        scenario: A duplicate differing only in case is rejected
+        given: a user is registered with the address "alice@example.com"
+        when: I submit a user with the address "Alice@Example.com"
+        then: the submission is rejected as already registered
+      - clause: 3
+        scenario: The existing record survives a rejected duplicate
+        given: a user named "Alice Smith" is registered with an address
+        when: I submit a different name against that same address and it is rejected
+        then: the existing entry still shows the name "Alice Smith"
+      - clause: 4
+        scenario: The reason names the conflict
+        given: I have submitted an address that is already registered
+        when: the submission is rejected
+        then: the message states that the address is already registered rather than reporting a generic error
+
+  - id: UM-005
+    source: "authored from observed behaviour — not documented in the repository"
+    feature: Registration Failure Handling
+    title: Handle a server failure during registration
+    as_a: administrator
+    i_want: to be told when a registration could not be saved
+    so_that: I do not believe a user exists when it does not
+    description: >-
+      A failed create must never appear to have succeeded. If the server returns
+      an error or cannot be reached, the entry must not be appended to the
+      visible list, the form must keep its contents, and the failure must be
+      reported. Submitting must be blocked while a request is already in flight,
+      so that an impatient double click cannot create two users from one
+      intention.
+    acceptance_criteria:
+      - A failed registration does not add an entry to the visible list.
+      - The failure is reported to the administrator.
+      - The submit action is disabled while a request is in flight.
+      - A retry after a failure creates exactly one user.
+    scenarios:
+      - clause: 1
+        scenario: A server error does not add a visible entry
+        given: I am viewing the console with two users listed
+        when: I submit a new user and the server returns an error
+        then: the list still shows two entries
+      - clause: 2
+        scenario: The failure is reported
+        given: my submission has failed
+        when: the response is handled
+        then: a message states that the user could not be created
+      - clause: 3
+        scenario: Double submission is prevented
+        given: I have submitted the form and the request has not yet returned
+        when: I click submit again
+        then: no second request is sent
+      - clause: 4
+        scenario: Retrying after a failure creates one user
+        given: my first submission failed and my details are still in the form
+        when: I submit again and the server accepts it
+        then: exactly one user is created with those details
+
+  - id: UM-006
+    source: "authored from observed behaviour — not documented in the repository"
+    feature: User Removal
+    title: Remove a user from the directory
+    as_a: administrator
+    i_want: to remove a user who should no longer have access
+    so_that: access ends when someone leaves
+    description: >-
+      Removal is destructive and irreversible from the console, so it must be
+      confirmed before it happens and the confirmation must name the user being
+      removed. Once removed, the entry disappears from the list without a
+      reload, and the address they held becomes available for registration
+      again. A removal that fails on the server must leave the entry visible
+      rather than removing it optimistically.
+    acceptance_criteria:
+      - The administrator can remove a user from the directory.
+      - Removal is confirmed before it takes effect, and the confirmation names the user.
+      - The entry disappears from the list without a reload.
+      - A failed removal leaves the entry visible.
+      - The removed user's email address can be registered again.
+    scenarios:
+      - clause: 1
+        scenario: The removal action is available
+        given: the directory lists at least one user
+        when: I view an entry
+        then: a remove action is offered for that user
+      - clause: 2
+        scenario: Removal is confirmed first
+        given: the directory lists a user named "Alice Smith"
+        when: I choose to remove that user
+        then: a confirmation naming "Alice Smith" is shown and the user is still listed
+      - clause: 3
+        scenario: A confirmed removal updates the list
+        given: I have confirmed the removal of a listed user
+        when: the server confirms the deletion
+        then: that entry is no longer listed and the page has not reloaded
+      - clause: 4
+        scenario: A failed removal keeps the entry
+        given: I have confirmed a removal
+        when: the server returns an error
+        then: the entry is still listed and a message states that the removal failed
+      - clause: 5
+        scenario: The address becomes available again
+        given: a user holding "alice@example.com" has been removed
+        when: I register a new user with "alice@example.com"
+        then: the new user is created
+
+  - id: UM-007
+    source: "authored from observed behaviour — not documented in the repository"
+    feature: Directory Search
+    title: Find a user in a long directory
+    as_a: administrator
+    i_want: to search the directory by name or email address
+    so_that: I can find one person without scrolling through everyone
+    description: >-
+      Search filters the already-loaded directory as the administrator types,
+      matching on either the name or the email address, ignoring case. Clearing
+      the search restores the full list. A search matching nobody must say so
+      rather than presenting an empty list that looks like an empty directory,
+      and searching must not alter any stored record.
+    acceptance_criteria:
+      - The directory can be searched by name or by email address.
+      - Matching ignores case.
+      - Clearing the search restores the full list.
+      - A search matching nobody states that there are no matches.
+    scenarios:
+      - clause: 1
+        scenario: Searching by email address
+        given: the directory contains a user with the address "alice@example.com"
+        when: I search for "alice@"
+        then: that user is listed and users whose details do not contain the term are not
+      - clause: 2
+        scenario: Search ignores case
+        given: the directory contains a user named "Alice Smith"
+        when: I search for "alice"
+        then: that user is listed
+      - clause: 3
+        scenario: Clearing the search restores everyone
+        given: I have filtered the directory to one entry
+        when: I clear the search field
+        then: every registered user is listed again
+      - clause: 4
+        scenario: A search matching nobody
+        given: no user's name or address contains "zzz"
+        when: I search for "zzz"
+        then: a message states that no users match the search
+
+  - id: UM-008
+    source: "authored from observed behaviour — not documented in the repository"
+    feature: User Detail Editing
+    title: Correct a user's details
+    as_a: administrator
+    i_want: to correct a user's name or email address
+    so_that: a typo does not require deleting and recreating the account
+    description: >-
+      An existing user's name and email address can be edited. The same
+      validation and uniqueness rules that govern registration apply to an edit,
+      with the exception that a user keeping their own address is not a
+      duplicate of themselves. Changes are shown in the list once the server
+      confirms them, and abandoning an edit leaves the record as it was.
+    acceptance_criteria:
+      - The administrator can edit an existing user's name and email address.
+      - Registration validation rules apply equally to an edit.
+      - A user keeping their own email address is not treated as a duplicate.
+      - Abandoning an edit leaves the stored record unchanged.
+    scenarios:
+      - clause: 1
+        scenario: Correcting a name
+        given: a user is listed with the name "Alcie Smith"
+        when: I edit the name to "Alice Smith" and save
+        then: the entry shows "Alice Smith"
+      - clause: 2
+        scenario: An edit to a malformed address is refused
+        given: I am editing a registered user
+        when: I change the address to one that is not well formed and save
+        then: the change is refused and the stored address is unchanged
+      - clause: 3
+        scenario: Keeping your own address is not a duplicate
+        given: I am editing a user without changing their email address
+        when: I change only the name and save
+        then: the change is accepted and no duplicate-address error is raised
+      - clause: 4
+        scenario: Abandoning an edit
+        given: I have changed a user's name but not saved
+        when: I cancel the edit
+        then: the entry still shows the original name

@@ -71,10 +71,12 @@ describe("Server Actions — auth", () => {
 
       await expect(signUp(formData)).rejects.toThrow("NEXT_REDIRECT:/");
 
-      expect(mockClient.auth.signUp).toHaveBeenCalledWith({
-        email: "test@example.com",
-        password: "password123",
-      });
+      expect(mockClient.auth.signUp).toHaveBeenCalledWith(
+        expect.objectContaining({
+          email: "test@example.com",
+          password: "password123",
+        })
+      );
       expect(mockRedirect).toHaveBeenCalledWith("/");
     });
 
@@ -137,7 +139,12 @@ describe("Server Actions — auth", () => {
       await expect(signUp(formData)).rejects.toThrow();
 
       const redirectUrl = mockRedirect.mock.calls[0]?.[0] as string;
-      expect(redirectUrl).not.toContain("Internal Supabase error details");
+      // Checked decoded, since the previous assertion passed only because
+      // encodeURIComponent had replaced the spaces.
+      expect(decodeURIComponent(redirectUrl)).not.toContain(
+        "Internal Supabase error details"
+      );
+      expect(redirectUrl).toBe("/login?error=signup_failed");
     });
 
     it("redirects to /login with error when email or password is missing", async () => {
@@ -195,9 +202,61 @@ describe("Server Actions — auth", () => {
         "NEXT_REDIRECT:/login"
       );
 
-      expect(mockRedirect).toHaveBeenCalledWith(
-        expect.stringContaining("/login?error=")
-      );
+      expect(mockRedirect).toHaveBeenCalledWith("/login?error=invalid_credentials");
+    });
+
+    it("classifies a bad-credential error by error.code when the message is unhelpful", async () => {
+      const mockClient = buildMockSupabaseClient({
+        signInWithPassword: vi.fn().mockResolvedValue({
+          data: { user: null },
+          error: { code: "invalid_credentials", status: 400, message: "Bad Request" },
+        }),
+      });
+      mockCreateServerSupabaseClient.mockResolvedValue(mockClient);
+
+      const formData = new FormData();
+      formData.set("email", "user@example.com");
+      formData.set("password", "wrongpassword");
+
+      await expect(signInWithPassword(formData)).rejects.toThrow();
+
+      expect(mockRedirect).toHaveBeenCalledWith("/login?error=invalid_credentials");
+    });
+
+    it("distinguishes an unconfirmed email from a wrong password", async () => {
+      const mockClient = buildMockSupabaseClient({
+        signInWithPassword: vi.fn().mockResolvedValue({
+          data: { user: null },
+          error: { code: "email_not_confirmed", message: "Email not confirmed" },
+        }),
+      });
+      mockCreateServerSupabaseClient.mockResolvedValue(mockClient);
+
+      const formData = new FormData();
+      formData.set("email", "user@example.com");
+      formData.set("password", "secret");
+
+      await expect(signInWithPassword(formData)).rejects.toThrow();
+
+      expect(mockRedirect).toHaveBeenCalledWith("/login?error=email_not_confirmed");
+    });
+
+    it("falls back to invalid_credentials for an unrecognised sign-in failure", async () => {
+      const mockClient = buildMockSupabaseClient({
+        signInWithPassword: vi.fn().mockResolvedValue({
+          data: { user: null },
+          error: { message: "some brand new upstream failure" },
+        }),
+      });
+      mockCreateServerSupabaseClient.mockResolvedValue(mockClient);
+
+      const formData = new FormData();
+      formData.set("email", "user@example.com");
+      formData.set("password", "secret");
+
+      await expect(signInWithPassword(formData)).rejects.toThrow();
+
+      expect(mockRedirect).toHaveBeenCalledWith("/login?error=invalid_credentials");
     });
 
     it("redirects to /login with error when email or password is missing", async () => {
@@ -212,9 +271,7 @@ describe("Server Actions — auth", () => {
       );
 
       expect(mockClient.auth.signInWithPassword).not.toHaveBeenCalled();
-      expect(mockRedirect).toHaveBeenCalledWith(
-        expect.stringContaining("/login?error=")
-      );
+      expect(mockRedirect).toHaveBeenCalledWith("/login?error=missing_fields");
     });
   });
 

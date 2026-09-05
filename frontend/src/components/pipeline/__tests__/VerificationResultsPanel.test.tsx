@@ -6,7 +6,7 @@
  * GitHub links, mobile overlay, and empty-state guard.
  */
 import React from "react";
-import { render, screen, fireEvent } from "@testing-library/react";
+import { render, screen, fireEvent } from '@/test/test-utils';
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import VerificationResultsPanel from "@/components/pipeline/VerificationResultsPanel";
 import type { VerificationVerdict, VerificationSummary } from "@/lib/types/verification";
@@ -17,12 +17,31 @@ import type { VerificationVerdict, VerificationSummary } from "@/lib/types/verif
 
 let mockVerificationResults: VerificationVerdict[] = [];
 let mockVerificationSummary: VerificationSummary | null = null;
+let mockVerificationMode: string | null = null;
+let mockGithubInput = "";
 
 vi.mock("@/context/SessionContext", () => ({
     useSessionContext: () => ({
+        sessionId: "session-123",
         verificationResults: mockVerificationResults,
         verificationSummary: mockVerificationSummary,
+        isVerifying: false,
+        bddContent: "",
+        // The panel echoes the source the run was scoped to; in the app this is
+        // restored from the stored rows when a past session is reopened.
+        verificationMode: mockVerificationMode,
+        githubInput: mockGithubInput,
     }),
+}));
+
+// Story 5.4: stub the export mutation hooks (they use TanStack Query internally,
+// which would otherwise require a QueryClientProvider in these unit tests).
+const mockExportPdf = vi.fn();
+const mockExportCsv = vi.fn();
+
+vi.mock("@/lib/hooks/useVerification", () => ({
+    useExportReportPdf: () => ({ mutate: mockExportPdf, isPending: false, error: null }),
+    useExportReportCsv: () => ({ mutate: mockExportCsv, isPending: false, error: null }),
 }));
 
 // ---------------------------------------------------------------------------
@@ -49,6 +68,8 @@ function makeSummary(overrides: Partial<VerificationSummary> = {}): Verification
 function resetMockState() {
     mockVerificationResults = [];
     mockVerificationSummary = null;
+    mockVerificationMode = null;
+    mockGithubInput = "";
 }
 
 // ---------------------------------------------------------------------------
@@ -64,8 +85,11 @@ describe("VerificationResultsPanel", () => {
     // ---- AC guard: renders nothing when empty ---------------------------
 
     it("renders nothing when verificationResults is empty and verificationSummary is null", () => {
-        const { container } = render(<VerificationResultsPanel />);
-        expect(container.firstChild).toBeNull();
+        render(<VerificationResultsPanel />);
+        // The shared render mounts ToastProvider's notifications region, so the
+        // panel's absence is asserted directly rather than via an empty container.
+        expect(screen.queryByRole("region", { name: /verification/i })).not.toBeInTheDocument();
+        expect(screen.queryByText(/scenario/i)).not.toBeInTheDocument();
     });
 
     // ---- AC 4: Summary bar ---------------------------------------------
@@ -89,9 +113,9 @@ describe("VerificationResultsPanel", () => {
         render(<VerificationResultsPanel />);
 
         expect(screen.getByText("100%")).toBeInTheDocument();
-        // Summary container should have emerald styling
+        // Summary container carries the pass signal styling
         const summaryEl = screen.getByText("100%").closest("div");
-        expect(summaryEl?.className).toMatch(/emerald/);
+        expect(summaryEl?.className).toMatch(/pass/);
     });
 
     it("shows 0% pass rate summary with red accent class", () => {
@@ -102,7 +126,7 @@ describe("VerificationResultsPanel", () => {
 
         expect(screen.getByText("0%")).toBeInTheDocument();
         const summaryEl = screen.getByText("0%").closest("div");
-        expect(summaryEl?.className).toMatch(/rose/);
+        expect(summaryEl?.className).toMatch(/fail/);
     });
 
     // ---- AC 1: One row per verdict (AC 1) --------------------------------
@@ -208,13 +232,60 @@ describe("VerificationResultsPanel", () => {
 
     // ---- AC 6: Mobile overlay is rendered in DOM ------------------------
 
-    it("renders mobile read-only overlay element (AC 6)", () => {
+    // Skipped (Story 4.4 review M2): the mobile read-only overlay this asserted
+    // was removed from VerificationResultsPanel in a later refactor, so the text
+    // no longer exists. Kept as a documented skip rather than a false-green delete;
+    // restore/remove when the mobile overlay decision is revisited.
+    it.skip("renders mobile read-only overlay element (AC 6)", () => {
         mockVerificationResults = [makeVerdict()];
 
         render(<VerificationResultsPanel />);
 
         // The overlay is always present in DOM; CSS (md:hidden) controls visibility
         expect(screen.getByText(/results are read-only on mobile/i)).toBeInTheDocument();
+    });
+
+    // ---- Verified-against source ----------------------------------------
+
+    it("shows the source the verdicts were checked against", () => {
+        mockVerificationResults = [makeVerdict()];
+        mockVerificationSummary = makeSummary();
+        mockVerificationMode = "full_repo";
+        mockGithubInput = "https://github.com/org/repo";
+
+        render(<VerificationResultsPanel />);
+
+        expect(screen.getByText(/verified against/i)).toBeInTheDocument();
+        const link = screen.getByRole("link", { name: "https://github.com/org/repo" });
+        expect(link).toHaveAttribute("href", "https://github.com/org/repo");
+        expect(link).toHaveAttribute("target", "_blank");
+    });
+
+    it("lists every file URL when the run used exact-files mode", () => {
+        mockVerificationResults = [makeVerdict()];
+        mockVerificationSummary = makeSummary();
+        mockVerificationMode = "exact_files";
+        mockGithubInput =
+            "https://github.com/org/repo/blob/main/a.py\nhttps://github.com/org/repo/blob/main/b.py";
+
+        render(<VerificationResultsPanel />);
+
+        expect(
+            screen.getByRole("link", { name: /a\.py$/ })
+        ).toBeInTheDocument();
+        expect(
+            screen.getByRole("link", { name: /b\.py$/ })
+        ).toBeInTheDocument();
+    });
+
+    it("omits the source block when no source was recorded (older runs)", () => {
+        mockVerificationResults = [makeVerdict()];
+        mockVerificationSummary = makeSummary();
+        mockGithubInput = "";
+
+        render(<VerificationResultsPanel />);
+
+        expect(screen.queryByText(/verified against/i)).not.toBeInTheDocument();
     });
 
     // ---- AC 7: No RAG section -------------------------------------------
@@ -238,5 +309,35 @@ describe("VerificationResultsPanel", () => {
         render(<VerificationResultsPanel />);
 
         expect(screen.getByText("100%")).toBeInTheDocument();
+    });
+
+    // ---- Story 5.4: Report export buttons -------------------------------
+
+    it("disables export buttons when there are no verification results", () => {
+        mockVerificationResults = [];
+        mockVerificationSummary = makeSummary({ total: 3, passed: 3, failed: 0 });
+
+        render(<VerificationResultsPanel />);
+
+        expect(screen.getByRole("button", { name: /download pdf/i })).toBeDisabled();
+        expect(screen.getByRole("button", { name: /download csv/i })).toBeDisabled();
+    });
+
+    it("enables export buttons and triggers export mutations when results exist", () => {
+        mockVerificationResults = [makeVerdict()];
+        mockVerificationSummary = makeSummary();
+
+        render(<VerificationResultsPanel />);
+
+        const pdfBtn = screen.getByRole("button", { name: /download pdf/i });
+        const csvBtn = screen.getByRole("button", { name: /download csv/i });
+        expect(pdfBtn).toBeEnabled();
+        expect(csvBtn).toBeEnabled();
+
+        fireEvent.click(pdfBtn);
+        expect(mockExportPdf).toHaveBeenCalledWith("session-123");
+
+        fireEvent.click(csvBtn);
+        expect(mockExportCsv).toHaveBeenCalledWith("session-123");
     });
 });
