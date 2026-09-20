@@ -135,8 +135,22 @@ class TestFullTextGrounding:
     def test_chunk_from_match_carries_text_and_snippet(self):
         chunk = _chunk_from_match(_make_match())
         assert chunk["text"] == _LONG_TEXT
-        assert chunk["snippet"] == _LONG_TEXT[:300]
-        assert len(chunk["snippet"]) == 300
+        # The excerpt stays within the budget (the ellipsis counts against it)
+        # and ends on a whole word — a mid-word cut reads in the UI as text
+        # that failed to load rather than as an excerpt.
+        assert len(chunk["snippet"]) <= 300
+        assert chunk["snippet"].endswith("…")
+        assert _LONG_TEXT.startswith(chunk["snippet"].rstrip("…"))
+
+    def test_snippet_is_left_whole_when_it_fits(self):
+        chunk = _chunk_from_match(_make_match("Short enough to keep."))
+        assert chunk["snippet"] == "Short enough to keep."
+
+    def test_snippet_hard_cuts_a_chunk_with_no_word_boundary(self):
+        """One long token (a URL, a minified blob) offers nothing to back up to."""
+        chunk = _chunk_from_match(_make_match("x" * 500))
+        assert len(chunk["snippet"]) <= 300
+        assert chunk["snippet"].endswith("…")
 
     def test_format_rag_block_uses_full_text(self):
         chunk = _chunk_from_match(_make_match())
@@ -157,11 +171,17 @@ class TestFullTextGrounding:
         assert _LONG_TEXT.strip() in prompt
 
     def test_persisted_rag_payload_keeps_snippet_only(self):
-        """rag_context rows must not balloon with full chunk text."""
+        """rag_context rows must not balloon with full chunk text.
+
+        Carrying the full chunk was tried, to let the context panel show the
+        whole retrieved passage, and reverted: an arbitrary ~500-word window
+        opens mid-table and ends mid-thought, and the panel exists to say which
+        source backed a verdict, not to stand in for reading it.
+        """
         chunk = _chunk_from_match(_make_match())
         payload = rag_payload_from_chunks([chunk])
         assert payload is not None
-        assert payload[0]["snippet"] == _LONG_TEXT[:300]
+        assert len(payload[0]["snippet"]) <= 300
         assert "text" not in payload[0]
 
 

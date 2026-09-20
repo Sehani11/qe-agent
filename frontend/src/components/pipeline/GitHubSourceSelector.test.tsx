@@ -47,6 +47,8 @@ vi.mock("@/context/SessionContext", () => ({
     }),
 }));
 
+// TODO(code-index): the code-index switch is commented out in the component
+// (see TODO.md), so this mock and the tests below it are unused for now.
 // The code-index switch is disabled unless the project has an index, so its
 // status decides whether the control can be clicked at all.
 let mockCodeIndex: {
@@ -165,44 +167,46 @@ describe("GitHubSourceSelector", () => {
     });
 
     // ---- Code-index opt-in switch ---------------------------------------
+    // TODO(code-index): re-enable these once the "Use code index" switch is
+    // back in GitHubSourceSelector. See TODO.md.
 
-    const codeIndexSwitch = () =>
-        screen.getByRole("switch", { name: /use code index/i });
+    // const codeIndexSwitch = () =>
+    //     screen.getByRole("switch", { name: /use code index/i });
 
-    it("disables the code-index switch when the project has no index", () => {
-        // A switch that silently does nothing is worse than one that says why
-        // it cannot: the backend ignores the flag without an index.
-        renderSelector();
-        expect(codeIndexSwitch()).toBeDisabled();
-        expect(
-            screen.getByText(/index this project's repository/i)
-        ).toBeInTheDocument();
-    });
+    // it("disables the code-index switch when the project has no index", () => {
+    //     // A switch that silently does nothing is worse than one that says why
+    //     // it cannot: the backend ignores the flag without an index.
+    //     renderSelector();
+    //     expect(codeIndexSwitch()).toBeDisabled();
+    //     expect(
+    //         screen.getByText(/index this project's repository/i)
+    //     ).toBeInTheDocument();
+    // });
 
-    it("enables it and reports what was indexed once an index exists", () => {
-        mockCodeIndex = {
-            indexed: true,
-            repo: "org/repo",
-            indexed_ref: "abc1234def",
-            file_count: 120,
-            indexed_at: "2026-08-01T00:00:00Z",
-        };
-        renderSelector();
+    // it("enables it and reports what was indexed once an index exists", () => {
+    //     mockCodeIndex = {
+    //         indexed: true,
+    //         repo: "org/repo",
+    //         indexed_ref: "abc1234def",
+    //         file_count: 120,
+    //         indexed_at: "2026-08-01T00:00:00Z",
+    //     };
+    //     renderSelector();
+    //
+    //     expect(codeIndexSwitch()).not.toBeDisabled();
+    //     fireEvent.click(codeIndexSwitch());
+    //     expect(mockSetCodeIndexEnabled).toHaveBeenCalledWith(true);
+    //     expect(screen.getByText(/abc1234/)).toBeInTheDocument();
+    // });
 
-        expect(codeIndexSwitch()).not.toBeDisabled();
-        fireEvent.click(codeIndexSwitch());
-        expect(mockSetCodeIndexEnabled).toHaveBeenCalledWith(true);
-        expect(screen.getByText(/abc1234/)).toBeInTheDocument();
-    });
-
-    it("stays off when the index disappears even if the flag was left on", () => {
-        // Session state outlives the index: re-indexing elsewhere, or switching
-        // projects, can leave the flag set with nothing behind it.
-        mockCodeIndexEnabled = true;
-        renderSelector();
-
-        expect(codeIndexSwitch()).toHaveAttribute("aria-checked", "false");
-    });
+    // it("stays off when the index disappears even if the flag was left on", () => {
+    //     // Session state outlives the index: re-indexing elsewhere, or switching
+    //     // projects, can leave the flag set with nothing behind it.
+    //     mockCodeIndexEnabled = true;
+    //     renderSelector();
+    //
+    //     expect(codeIndexSwitch()).toHaveAttribute("aria-checked", "false");
+    // });
 
     it("still explains what enabling it does", () => {
         renderSelector();

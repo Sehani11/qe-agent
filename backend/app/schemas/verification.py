@@ -41,8 +41,18 @@ class RagContextItem(BaseModel):
     source_id: str = Field(
         ..., description="Confluence page ID or Jira ticket key"
     )
+    # Deliberately an excerpt, not the whole chunk. Carrying the full text was
+    # tried and reverted: chunks are ~500-word windows cut on sentence count,
+    # so one opens mid-table and ends mid-thought however well it is rendered,
+    # and flattened Confluence tables read as a column of stray words. The
+    # panel is for recognising which source backed a verdict; `url` is how a
+    # reader gets the document itself, properly laid out.
     snippet: str = Field(
-        ..., description="First 300 characters of the retrieved chunk"
+        ...,
+        description=(
+            "Excerpt of the retrieved chunk, at most 300 characters, cut on a "
+            "word boundary and ellipsised when the chunk runs longer"
+        ),
     )
     # Story 4.4 — optional with defaults so persisted rag_context from Story 4.3
     # (which lacks these keys) still validates.

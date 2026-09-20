@@ -36,10 +36,43 @@ class ConfluencePage(BaseModel):
     body: str  # Plain text — HTML stripped
 
 
+# Block-level elements are where one sentence ends and the next begins. Deleting
+# them outright welded the two together — a page ending a paragraph with "...can
+# end it." before an "Coding Challenges" heading came back as "...can end it.Coding
+# Challenges", which reads as broken text in the UI and is no clearer to the
+# embedding model. Inline tags stay deleted so words inside them are not split.
+_BLOCK_TAG_RE = re.compile(
+    r"</?(?:p|div|br|hr|li|ul|ol|tr|td|th|table|thead|tbody|section|article"
+    r"|h[1-6]|blockquote|pre|dl|dt|dd|figcaption)\b[^>]*>",
+    re.IGNORECASE,
+)
+_TAG_RE = re.compile(r"<[^>]+>")
+
+# Macro parameters are configuration, and their VALUES are text nodes — so
+# stripping tags alone left them in the prose. A page built with a layout macro
+# came through carrying "wide760true", which is both nonsense to read and noise
+# in the embedding. Dropped with their contents, unlike every other element.
+_MACRO_PARAM_RE = re.compile(
+    r"<ac:parameter\b[^>]*>.*?</ac:parameter>",
+    re.IGNORECASE | re.DOTALL,
+)
+
+
 def _strip_html(raw: str) -> str:
-    """Remove HTML tags and decode HTML entities from Confluence body content."""
-    text = re.sub(r"<[^>]+>", "", raw)
-    return html.unescape(text).strip()
+    """Flatten Confluence body HTML into plain text.
+
+    Entities are decoded only AFTER the tags are gone, so an escaped `&lt;p&gt;`
+    in the prose is left as text rather than becoming a tag and being stripped.
+    """
+    text = _MACRO_PARAM_RE.sub("", raw)
+    text = _BLOCK_TAG_RE.sub("\n", text)
+    text = _TAG_RE.sub("", text)
+    text = html.unescape(text)
+    # Each element contributes a newline for its opening AND closing tag, so the
+    # blank lines between blocks are an artefact of the substitution, not of the
+    # source.
+    lines = (line.strip() for line in text.split("\n"))
+    return "\n".join(line for line in lines if line).strip()
 
 
 def _build_page_url(page_id: str, base_url: str = "") -> str:

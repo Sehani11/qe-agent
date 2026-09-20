@@ -2,12 +2,14 @@
 
 import AppNav from "@/components/layout/AppNav";
 import PageHeader from "@/components/layout/PageHeader";
-import ModelComparisonPanel from "@/components/evaluation/ModelComparisonPanel";
-import SavedRunsPanel from "@/components/evaluation/SavedRunsPanel";
-import TrainingDataPanel from "@/components/training/TrainingDataPanel";
-import TrainingRunsPanel from "@/components/training/TrainingRunsPanel";
-import WipeTrainingDataPanel from "@/components/training/WipeTrainingDataPanel";
-import { useTrainingDatasets } from "@/lib/hooks/useTrainingData";
+// TODO(fine-tune): Fine-tune page is temporarily disabled — see TODO.md.
+// Restore these imports and the JSX below to bring it back.
+// import ModelComparisonPanel from "@/components/evaluation/ModelComparisonPanel";
+// import SavedRunsPanel from "@/components/evaluation/SavedRunsPanel";
+// import TrainingDataPanel from "@/components/training/TrainingDataPanel";
+// import TrainingRunsPanel from "@/components/training/TrainingRunsPanel";
+// import WipeTrainingDataPanel from "@/components/training/WipeTrainingDataPanel";
+// import { useTrainingDatasets } from "@/lib/hooks/useTrainingData";
 
 /**
  * Everything about the fine-tuned BDD model, on one page.
@@ -19,13 +21,30 @@ import { useTrainingDatasets } from "@/lib/hooks/useTrainingData";
  *
  * The order follows that loop — supply the data, train on it, then measure what
  * it produced.
+ *
+ * TODO(fine-tune): temporarily disabled. See TODO.md.
  */
 export default function FineTunePage() {
     // Read here as well as inside the upload panel so the train button can say
     // "upload something first" instead of failing. Both calls share one React
     // Query cache entry, so this is the same request, not a second one.
-    const { data: datasets } = useTrainingDatasets();
+    // const { data: datasets } = useTrainingDatasets();
 
+    return (
+        <div className="flex min-h-screen flex-col">
+            <AppNav />
+
+            <main id="main" className="app-shell flex-1 py-10">
+                <PageHeader
+                    eyebrow="Fine tune"
+                    title="Temporarily unavailable"
+                    description="The fine-tune workflow is switched off for now. Check back later."
+                />
+            </main>
+        </div>
+    );
+
+    /* Original content — restore when re-enabling the fine-tune feature:
     return (
         <div className="flex min-h-screen flex-col">
             <AppNav />
@@ -47,9 +66,6 @@ export default function FineTunePage() {
                         <TrainingDataPanel />
                     </section>
 
-                    {/* Between the data and the measurement, because that is
-                        where it sits in the loop: nothing to train without the
-                        section above, nothing to compare without this one. */}
                     <section>
                         <h2>Training</h2>
                         <p className="mb-4 mt-1.5 text-sm leading-relaxed text-muted-foreground">
@@ -59,9 +75,6 @@ export default function FineTunePage() {
                         <TrainingRunsPanel datasetCount={datasets?.length ?? 0} />
                     </section>
 
-                    {/* Saved runs before the quick comparison: batches over
-                        several tickets are what accumulates into a report, while
-                        the check below is ad-hoc and saves nothing. */}
                     <section>
                         <h2>Evaluation runs</h2>
                         <p className="mb-4 mt-1.5 text-sm leading-relaxed text-muted-foreground">
@@ -80,8 +93,6 @@ export default function FineTunePage() {
                         <ModelComparisonPanel />
                     </section>
 
-                    {/* Last, and visually separated: the only control on this
-                        page that destroys work rather than producing it. */}
                     <section>
                         <h2>Start over</h2>
                         <p className="mb-4 mt-1.5 text-sm leading-relaxed text-muted-foreground">
@@ -93,4 +104,5 @@ export default function FineTunePage() {
             </main>
         </div>
     );
+    */
 }

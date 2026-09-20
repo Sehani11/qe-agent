@@ -10,9 +10,10 @@ import { useSession, useSessionBDD, useSessionVerificationResults } from "@/lib/
 import { useRunVerification } from "@/lib/hooks/useRunVerification";
 import apiClient from "@/lib/api/client";
 import AppNav from "@/components/layout/AppNav";
-import FineTunedToggle from "@/components/model/FineTunedToggle";
+// TODO(fine-tune): re-enable once the fine-tune feature is turned back on. See TODO.md.
+// import FineTunedToggle from "@/components/model/FineTunedToggle";
 import { useActiveProjectId } from "@/lib/stores/projectStore";
-import TrainingOptInToggle from "@/components/model/TrainingOptInToggle";
+// import TrainingOptInToggle from "@/components/model/TrainingOptInToggle";
 import { Button } from "@/components/ui/button";
 import { ConfirmModal } from "@/components/ui/confirm-modal";
 import { Input } from "@/components/ui/field";
@@ -420,6 +421,8 @@ export default function SessionPipelinePage() {
             mode: verificationMode,
             github_input: githubInput,
             use_knowledge_base: useKnowledgeBase,
+            // TODO(code-index): "Use code index" toggle is hidden in the UI for
+            // now (see TODO.md), so this always sends false until it's back.
             code_index_enabled: codeIndexEnabled,
         });
     };
@@ -558,11 +561,12 @@ export default function SessionPipelinePage() {
                     </div>
 
                     {/* Which model generates, and whether what it produces may
-                        train a future one — both belong to the capture. */}
-                    <div className="mt-2.5 flex flex-wrap items-start gap-x-6 gap-y-2">
+                        train a future one — both belong to the capture.
+                        TODO(fine-tune): toggles temporarily disabled — see TODO.md. */}
+                    {/* <div className="mt-2.5 flex flex-wrap items-start gap-x-6 gap-y-2">
                         <FineTunedToggle />
                         <TrainingOptInToggle />
-                    </div>
+                    </div> */}
 
                     {ticketInputError && (
                         <p id="ticket-input-error" className="mt-2 text-xs text-fail-ink" role="alert">

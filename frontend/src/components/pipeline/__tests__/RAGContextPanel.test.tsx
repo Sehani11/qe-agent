@@ -7,15 +7,36 @@
  */
 import React from "react";
 import { render, screen, fireEvent } from '@/test/test-utils';
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, afterEach } from "vitest";
 import RAGContextPanel from "@/components/pipeline/RAGContextPanel";
 import type { RagContextItem } from "@/lib/types/verification";
+
+/**
+ * jsdom does not lay text out, so a clamped paragraph reports scrollHeight and
+ * clientHeight as 0 — indistinguishable from one that fits. These stand in for
+ * the browser's answer so the overflow measurement has something to read.
+ */
+function mockOverflow(overflowing: boolean) {
+    Object.defineProperty(HTMLElement.prototype, "clientHeight", {
+        configurable: true,
+        value: 32,
+    });
+    Object.defineProperty(HTMLElement.prototype, "scrollHeight", {
+        configurable: true,
+        value: overflowing ? 96 : 32,
+    });
+}
+
+afterEach(() => {
+    // Leaving these on the prototype would leak into every later suite.
+    Reflect.deleteProperty(HTMLElement.prototype, "clientHeight");
+    Reflect.deleteProperty(HTMLElement.prototype, "scrollHeight");
+});
 
 function makeItem(overrides: Partial<RagContextItem> = {}): RagContextItem {
     return {
         source: "confluence",
         source_id: "12345",
-        // >100 chars so the expand/collapse affordance renders (see isTruncatable).
         snippet:
             "Architecture decision: the auth service uses JWT with RS256 signing keys, rotated every 90 days via the platform key-management service and validated at the gateway.",
         title: "Auth Design",
@@ -85,6 +106,7 @@ describe("RAGContextPanel", () => {
     // ---- AC1: expandable snippet -----------------------------------------
 
     it("toggles snippet expansion when 'Show more' is clicked (AC1)", () => {
+        mockOverflow(true);
         render(<RAGContextPanel items={[makeItem()]} />);
 
         const snippet = screen.getByText(/JWT with RS256/i);
@@ -96,6 +118,31 @@ describe("RAGContextPanel", () => {
 
         fireEvent.click(screen.getByRole("button", { name: /show less/i }));
         expect(snippet.className).toMatch(/line-clamp-2/);
+    });
+
+    it("keeps 'Show less' available once expanded", () => {
+        // Expanding removes the clamp, so the element then measures as fitting.
+        // Dropping the button on that reading would strand the reader open.
+        mockOverflow(true);
+        render(<RAGContextPanel items={[makeItem()]} />);
+
+        fireEvent.click(screen.getByRole("button", { name: /show more/i }));
+        mockOverflow(false);
+
+        expect(
+            screen.getByRole("button", { name: /show less/i })
+        ).toBeInTheDocument();
+    });
+
+    it("offers no toggle when the snippet already fits", () => {
+        // The affordance used to be decided by character count, which on a wide
+        // card put a "Show more" on text that was fully visible — clicking it
+        // revealed nothing.
+        mockOverflow(false);
+        render(<RAGContextPanel items={[makeItem()]} />);
+
+        expect(screen.queryByRole("button", { name: /show more/i })).toBeNull();
+        expect(screen.getByText(/JWT with RS256/i)).toBeInTheDocument();
     });
 
     // ---- Multiple items --------------------------------------------------

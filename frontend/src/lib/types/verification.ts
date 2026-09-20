@@ -30,7 +30,7 @@ export interface CodeReference {
 export interface RagContextItem {
     source: string;      // "confluence" | "jira"
     source_id: string;   // Confluence page ID or Jira ticket key
-    snippet: string;     // First 300 characters of the retrieved chunk
+    snippet: string;     // Excerpt of the retrieved chunk, <=300 chars
     // Story 4.4 — optional; absent for chunks ingested before 4.4.
     title?: string;      // Confluence page title / Jira summary
     url?: string;        // Deep link to the source; empty when not linkable
