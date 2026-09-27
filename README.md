@@ -138,11 +138,17 @@ uv pip install --python convert-venv/Scripts/python.exe `
   --extra-index-url https://download.pytorch.org/whl/cpu `
   "torch==2.11.0" "transformers==4.57.6" "numpy~=1.26.4" `
   "sentencepiece>=0.1.98,<0.3.0" "gguf>=0.1.0" "protobuf>=4.21.0,<5.0.0"
+
+# torch needs a current Visual C++ runtime (admin; restart the terminal after)
+winget install --id Microsoft.VCRedist.2015+.x64 -e
+
+# verify — should print 2.11.0
+convert-venv/Scripts/python.exe -c "import torch; print(torch.__version__)"
 ```
 
 Reload the Fine tune page and **Serve this run** appears on completed runs.
 
-Four things that are easy to get wrong:
+Five things that are easy to get wrong:
 
 - **Both go at the repo root**, inside the working tree — the backend looks for
   `<repo>/llama.cpp/convert_lora_to_gguf.py` and `<repo>/convert-venv`. Cloned
@@ -154,6 +160,12 @@ Four things that are easy to get wrong:
 - **Never install these into `backend/.venv`.** The converter pins
   `numpy~=1.26.4`, which conflicts with the backend's stack. That is the whole
   reason it is a separate venv.
+- **An old Visual C++ runtime breaks torch.** If converting fails with
+  `OSError: [WinError 1114] … Error loading "…\torch\lib\c10.dll"`, the
+  machine's MSVC runtime is too old for torch 2.11 (for example 14.28, from the
+  VS 2019 era). Install the current x64 redistributable with the `winget` line
+  above, or from https://aka.ms/vs/17/release/vc_redist.x64.exe. The venv
+  itself is fine, so there is nothing to reinstall.
 - **It is large** — roughly 208 MB for llama.cpp and 664 MB for the venv, mostly
   CPU torch. Skip it on any machine that only needs to run the app.
 
