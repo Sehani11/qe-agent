@@ -51,6 +51,11 @@ def _make_run(
     run.holdout_pairs = 5
     run.kernel_ref = "someone/bdd-fine-tune"
     run.adapter_dir = adapter_dir
+    # A MagicMock answers every attribute, so these have to be set explicitly:
+    # left alone they return Mocks, which the response model rejects as strings.
+    run.serve_status = None
+    run.serve_detail = None
+    run.served_model = None
     run.log = "$ build_dataset.py\nWrote 40 train / 5 holdout pairs to training/data/\n"
     run.created_at = datetime(2026, 8, 24, tzinfo=UTC)
     run.completed_at = datetime(2026, 8, 24, tzinfo=UTC)
@@ -121,19 +126,29 @@ def test_sample_datasets_pass_their_own_validator():
     drift the moment BDDGenerateResponse or the quality thresholds changed, and
     the app would then ship a sample it rejects.
     """
-    kind, count = training_data_service.validate_upload(
+    jsonl = training_data_service.validate_upload(
         training_data_service.SAMPLE_JSONL_FILENAME,
         training_data_service.build_sample_jsonl().encode(),
     )
-    assert kind == "jsonl"
-    assert count >= 1
+    assert jsonl.kind == "jsonl"
+    assert jsonl.item_count >= 1
 
-    kind, count = training_data_service.validate_upload(
+    feature = training_data_service.validate_upload(
         training_data_service.SAMPLE_FEATURE_FILENAME,
         training_data_service.build_sample_feature().encode(),
     )
-    assert kind == "feature"
-    assert count >= 1
+    assert feature.kind == "feature"
+    assert feature.item_count >= 1
+
+    # The CSV sample is validated through the CSV -> pairs conversion, so this
+    # also pins that a sample a user edits in a spreadsheet still converts.
+    csv_sample = training_data_service.validate_upload(
+        training_data_service.SAMPLE_CSV_FILENAME,
+        training_data_service.build_sample_csv().encode(),
+    )
+    assert csv_sample.kind == "jsonl"
+    assert csv_sample.item_count >= 1
+    assert csv_sample.stored_filename.endswith(".jsonl")
 
 
 def test_sample_jsonl_download_is_an_attachment(client_as_user_a):
@@ -159,9 +174,24 @@ def test_sample_feature_download_is_selectable(client_as_user_a):
     assert "Feature:" in response.text
 
 
-def test_sample_dataset_rejects_an_unknown_kind(client_as_user_a):
+def test_sample_csv_download_opens_in_a_spreadsheet(client_as_user_a):
+    """text/csv, not octet-stream: opening it in a spreadsheet is the entire
+    reason this format exists here."""
     response = client_as_user_a.get(
         "/api/v1/training/sample-dataset", params={"kind": "csv"}
+    )
+
+    assert response.status_code == 200
+    assert response.headers["content-type"].startswith("text/csv")
+    assert training_data_service.SAMPLE_CSV_FILENAME in (
+        response.headers["content-disposition"]
+    )
+    assert response.text.splitlines()[0].startswith("ticket_id,feature,")
+
+
+def test_sample_dataset_rejects_an_unknown_kind(client_as_user_a):
+    response = client_as_user_a.get(
+        "/api/v1/training/sample-dataset", params={"kind": "xlsx"}
     )
     assert response.status_code == 422
 

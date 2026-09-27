@@ -1,8 +1,9 @@
 """Manual training-dataset upload API (Story 6.7).
 
-Lets a researcher supply their own `.feature` files or `.jsonl` training pairs
-so a fine-tune can be trained now, rather than waiting for captured corrections
-to accumulate.
+Lets a researcher supply their own `.feature` files, `.jsonl` training pairs, or
+a `.csv` authored in a spreadsheet, so a fine-tune can be trained now rather
+than waiting for captured corrections to accumulate. CSV is converted to pairs
+at upload — see `ValidatedUpload` in the service.
 
 Validation lives in `services/training_data_service.py` — the same module
 `training/build_dataset.py` uses — so this endpoint accepts exactly what the
@@ -23,12 +24,18 @@ from app.models.training_dataset import TrainingDataset
 from app.models.training_run import ACTIVE_STATUSES, TrainingRun
 from app.schemas.training import (
     RejectedFile,
+    ServingReadiness,
     TrainingDatasetResponse,
     TrainingReadiness,
     TrainingRunResponse,
     TrainingUploadResponse,
 )
-from app.services import training_data_service, training_run_service
+from app.services import (
+    model_serving_service,
+    training_data_service,
+    training_run_service,
+)
+from app.services.model_serving_service import ModelServingError
 from app.services.training_data_service import TrainingDataError
 from app.services.training_run_service import TrainingRunError
 
@@ -63,7 +70,7 @@ async def upload_datasets(
     db: AsyncSession = Depends(get_db),  # noqa: B008
     current_user: str = Depends(get_current_user),
 ) -> Response:
-    """Upload one or more `.feature` / `.jsonl` training files.
+    """Upload one or more `.feature` / `.jsonl` / `.csv` training files.
 
     Each file is validated, stored and recorded independently: the response
     reports per-file outcomes rather than failing the whole batch. Returns 422
@@ -157,8 +164,11 @@ async def delete_dataset(
 async def download_sample_dataset(
     kind: str = Query(
         "jsonl",
-        pattern="^(jsonl|feature)$",
-        description="'jsonl' for ready-made pairs, 'feature' for Gherkin.",
+        pattern="^(jsonl|feature|csv)$",
+        description=(
+            "'csv' for the spreadsheet authoring format, 'jsonl' for ready-made "
+            "pairs, 'feature' for Gherkin."
+        ),
     ),
     current_user: str = Depends(get_current_user),
 ) -> Response:
@@ -171,16 +181,23 @@ async def download_sample_dataset(
     an unauthenticated route here would be the only one in the file, and the
     exception is not worth the reader's time.
     """
+    # text/csv for the CSV sample so a double-click opens it in a spreadsheet,
+    # which is the entire reason that format exists here.
+    media_type = "application/octet-stream"
     if kind == "feature":
         body = training_data_service.build_sample_feature()
         filename = training_data_service.SAMPLE_FEATURE_FILENAME
+    elif kind == "csv":
+        body = training_data_service.build_sample_csv()
+        filename = training_data_service.SAMPLE_CSV_FILENAME
+        media_type = "text/csv"
     else:
         body = training_data_service.build_sample_jsonl()
         filename = training_data_service.SAMPLE_JSONL_FILENAME
 
     return Response(
         content=body.encode("utf-8"),
-        media_type="application/octet-stream",
+        media_type=media_type,
         headers={"Content-Disposition": f'attachment; filename="{filename}"'},
     )
 
@@ -198,6 +215,9 @@ def _to_run_response(run: TrainingRun) -> TrainingRunResponse:
         holdout_pairs=run.holdout_pairs,
         kernel_ref=run.kernel_ref,
         has_model=bool(run.adapter_dir),
+        serve_status=run.serve_status,
+        serve_detail=run.serve_detail,
+        served_model=run.served_model,
         log=run.log or "",
         created_at=run.created_at,
         completed_at=run.completed_at,
@@ -231,6 +251,20 @@ async def training_readiness(
         active_run_id=active_id,
         min_datasets=training_run_service.MIN_DATASETS_TO_TRAIN,
     )
+
+
+@router.get("/serving-readiness", response_model=ServingReadiness)
+async def serving_readiness(
+    current_user: str = Depends(get_current_user),
+) -> ServingReadiness:
+    """Whether a finished adapter can be published into a runtime from here.
+
+    Asked before the button is offered, for the same reason
+    `/readiness` is: the blockers are all operator setup nobody can fix from the
+    UI, and a button that always fails is worse than one that explains.
+    """
+    reason = await model_serving_service.serving_ready()
+    return ServingReadiness(can_serve=reason is None, reason=reason)
 
 
 @router.get("/runs", response_model=list[TrainingRunResponse])
@@ -321,6 +355,32 @@ async def download_run_model(
         media_type="application/zip",
         headers={"Content-Disposition": f'attachment; filename="{filename}"'},
     )
+
+
+@router.post(
+    "/runs/{run_id}/serve",
+    response_model=TrainingRunResponse,
+    status_code=202,
+)
+async def serve_run(
+    run_id: str,
+    db: AsyncSession = Depends(get_db),  # noqa: B008
+    current_user: str = Depends(get_current_user),
+) -> TrainingRunResponse:
+    """Publish this run's adapter into the local model runtime.
+
+    202, like starting a run: converting the adapter and registering it takes
+    longer than a request, so the row carries the progress and the client polls
+    `GET /training/runs/{id}` for `serve_status`.
+    """
+    run = await _owned_run(run_id, current_user, db)
+    try:
+        run = await model_serving_service.start_publish(run, db)
+    except ModelServingError as exc:
+        # 409 for the same reason starting a run uses it: the request is fine,
+        # the server is not in a state to serve it.
+        raise HTTPException(status_code=409, detail=exc.message) from exc
+    return _to_run_response(run)
 
 
 @router.delete("/runs/{run_id}", status_code=204)

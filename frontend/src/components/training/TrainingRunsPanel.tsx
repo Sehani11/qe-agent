@@ -3,11 +3,13 @@
 import React, { useState } from "react";
 import {
     AlertCircle,
+    CheckCircle2,
     ChevronDown,
     Download,
     ExternalLink,
     Loader2,
     Play,
+    Radio,
     Terminal,
     Trash2,
 } from "lucide-react";
@@ -22,6 +24,8 @@ import {
     useDeleteFinishedTrainingRuns,
     useDeleteTrainingRun,
     useDownloadTrainedModel,
+    usePublishTrainingRun,
+    useServingReadiness,
     useStartTrainingRun,
     useTrainingReadiness,
     useTrainingRuns,
@@ -89,14 +93,35 @@ function RunLog({ log }: { log: string }) {
 function RunRow({
     run,
     onDelete,
+    servingBlockedBy,
 }: {
     run: TrainingRun;
     /** Opens the confirmation. Owned by the panel so only one can be open. */
     onDelete: (run: TrainingRun) => void;
+    /**
+     * Why this server cannot publish, or null when it can. Passed down rather
+     * than read here so twenty rows do not ask the same question twenty times.
+     */
+    servingBlockedBy: string | null;
 }) {
     const download = useDownloadTrainedModel();
+    const publish = usePublishTrainingRun();
     const toast = useToast();
     const active = isRunActive(run.status);
+    const publishing = run.serve_status === "publishing";
+
+    const handlePublish = () => {
+        publish.mutate(run.id, {
+            onError: (error) => {
+                toast.error("Could not publish this model", {
+                    description: apiErrorMessage(
+                        error,
+                        "The converter or the model runtime is not available on this server."
+                    ),
+                });
+            },
+        });
+    };
 
     const handleDownload = () => {
         download.mutate(run.id, {
@@ -148,6 +173,25 @@ function RunRow({
                         </a>
                     )}
 
+                    {/* Publishing and downloading are the two things to do
+                        with a finished adapter, so they sit together. Hidden
+                        rather than disabled when the server cannot publish at
+                        all: the reason belongs to the panel, not to each row. */}
+                    {run.has_model && !servingBlockedBy && (
+                        <Button
+                            size="sm"
+                            variant="outline"
+                            onClick={handlePublish}
+                            disabled={publishing || publish.isPending}
+                            loading={publishing || publish.isPending}
+                        >
+                            {!publishing && !publish.isPending && (
+                                <Radio className="h-3.5 w-3.5" aria-hidden="true" />
+                            )}
+                            {run.serve_status === "served" ? "Re-serve" : "Serve this run"}
+                        </Button>
+                    )}
+
                     {run.has_model && (
                         <Button
                             size="sm"
@@ -182,6 +226,39 @@ function RunRow({
                 </div>
             </div>
 
+            {/* Said in the row rather than only in a toast: publishing
+                outlives the click, and "which run is the app actually serving"
+                is the question this panel exists to answer afterwards. */}
+            {run.serve_status && (
+                <p
+                    className={`mt-2 flex items-start gap-1.5 text-xs ${
+                        run.serve_status === "failed"
+                            ? "text-fail-ink"
+                            : "text-muted-foreground"
+                    }`}
+                >
+                    {run.serve_status === "served" && (
+                        <CheckCircle2
+                            className="mt-0.5 h-3.5 w-3.5 shrink-0 text-pass-ink"
+                            aria-hidden="true"
+                        />
+                    )}
+                    {publishing && (
+                        <Loader2
+                            className="mt-0.5 h-3.5 w-3.5 shrink-0 animate-spin"
+                            aria-hidden="true"
+                        />
+                    )}
+                    {run.serve_status === "failed" && (
+                        <AlertCircle
+                            className="mt-0.5 h-3.5 w-3.5 shrink-0"
+                            aria-hidden="true"
+                        />
+                    )}
+                    <span>{run.serve_detail ?? run.serve_status}</span>
+                </p>
+            )}
+
             <RunLog log={run.log} />
         </li>
     );
@@ -197,11 +274,25 @@ function RunRow({
  */
 export default function TrainingRunsPanel({
     datasetCount = 0,
+    featureCount = 0,
 }: {
     /** Uploaded datasets available to train on. Zero means there is nothing to do. */
     datasetCount?: number;
+    /**
+     * How many of those uploads are `.feature` files.
+     *
+     * Only these cost anything to build: a feature file carries the Gherkin but
+     * not the criteria that produced it, so the builder pays an LLM to write
+     * those backwards. Pairs — `.jsonl`, and the `.csv` that converts to it —
+     * arrive with both halves and skip that step entirely.
+     */
+    featureCount?: number;
 }) {
     const { data: readiness } = useTrainingReadiness();
+    // Asked once for the whole list: the blockers are server-wide (no
+    // converter, no runtime), not per run.
+    const { data: serving } = useServingReadiness();
+    const servingBlockedBy = serving?.can_serve === false ? serving.reason : null;
     const { data: runs, isLoading, isError } = useTrainingRuns();
     const startRun = useStartTrainingRun();
     const deleteRun = useDeleteTrainingRun();
@@ -409,7 +500,12 @@ export default function TrainingRunsPanel({
                 ) : (
                     <ul className="flex flex-col gap-2">
                         {runs.map((run) => (
-                            <RunRow key={run.id} run={run} onDelete={setPendingDelete} />
+                            <RunRow
+                                key={run.id}
+                                run={run}
+                                onDelete={setPendingDelete}
+                                servingBlockedBy={servingBlockedBy}
+                            />
                         ))}
                     </ul>
                 )}
@@ -419,11 +515,27 @@ export default function TrainingRunsPanel({
                 open={confirming}
                 title="Start a training run"
                 description={
-                    <>
-                        This builds a training set from your uploads — one LLM call per
-                        document, which costs money — and then occupies your Kaggle GPU
-                        quota for the run. It cannot be cancelled from here.
-                    </>
+                    // The cost sentence is the whole reason this confirmation
+                    // exists, and it is only true for .feature uploads. Showing
+                    // it for a run that spends nothing teaches people to click
+                    // past the warning on the run that does.
+                    featureCount > 0 ? (
+                        <>
+                            This builds a training set from your uploads — one LLM call
+                            for each of the {featureCount} feature file
+                            {featureCount === 1 ? "" : "s"}, which costs money, because
+                            a feature file carries no acceptance criteria of its own to
+                            train against. It then occupies your Kaggle GPU quota for the
+                            run, and cannot be cancelled from here.
+                        </>
+                    ) : (
+                        <>
+                            This builds a training set from your uploads and occupies your
+                            Kaggle GPU quota for the run. It cannot be cancelled from
+                            here. No LLM calls are needed — your uploads are already
+                            complete training pairs.
+                        </>
+                    )
                 }
                 confirmLabel="Train now"
                 isConfirming={startRun.isPending}

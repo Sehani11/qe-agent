@@ -28,11 +28,10 @@ const onServer = () => false;
 const LINKS = [
     { href: "/sessions", label: "Sessions" },
     { href: "/knowledge", label: "Knowledge" },
-    // TODO(fine-tune): Fine-tune nav entry temporarily disabled — see TODO.md.
     // Training data and comparison were separate entries, which split one task
     // across two places: you cannot tell whether fine-tuning helped without
     // comparing against the general model.
-    // { href: "/fine-tune", label: "Fine tune" },
+    { href: "/fine-tune", label: "Fine tune" },
 ];
 
 /** The mark: a verdict tick, because a verdict is what this product produces. */

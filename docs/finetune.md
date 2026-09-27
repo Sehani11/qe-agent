@@ -16,7 +16,7 @@ So the manual list below is defined by contrast, not repeated:
 
 | Panel | Does |
 |---|---|
-| **Training data** | Upload `.feature` / `.jsonl` corpora, listed and deletable. Enforces the same quality filters the dataset builder uses, so nothing is accepted that the builder would later discard |
+| **Training data** | Upload `.csv` / `.feature` / `.jsonl` corpora, listed and deletable. Enforces the same quality filters the dataset builder uses, so nothing is accepted that the builder would later discard. A `.csv` is the spreadsheet authoring route — one row per scenario, converted to pairs on upload (see [csv-training-ingest-spec.md](csv-training-ingest-spec.md)) |
 | **Training** | **Train now** builds the pairs, pushes dataset + kernel to Kaggle, polls the GPU kernel, downloads the adapter to `training/outputs/run-<id>/`, streams the log into the run row. **Download model** serves it as a zip |
 | **Evaluation runs** / **Quick comparison** | Scores the fine-tune against the general LLM on a holdout, saves the results |
 | **Start over** | Deletes every dataset, run, adapter and evaluation row, the Kaggle dataset and kernels, and the model loaded in the serving runtime |
@@ -114,8 +114,8 @@ image) and has to be changed with it.
 **Why manual:** licensing is a human decision, so harvesting is deliberately not
 automated.
 
-If your users supply `.feature` / `.jsonl` files through the Training data
-panel, skip this. To build from public repositories instead, clone permissively
+If your users supply `.csv` / `.feature` / `.jsonl` files through the Training
+data panel, skip this. To build from public repositories instead, clone permissively
 licensed Cucumber / SpecFlow / Behat projects into a directory and point the
 builder at it:
 

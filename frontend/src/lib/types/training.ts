@@ -54,6 +54,28 @@ export function isRunActive(status: TrainingRunStatus): boolean {
     return ACTIVE_RUN_STATUSES.includes(status);
 }
 
+/**
+ * Whether this server can publish a finished adapter into a model runtime.
+ *
+ * Asked separately from `TrainingReadiness` because the prerequisites are
+ * unrelated — training needs Kaggle and a network, publishing needs a local
+ * converter and a runtime on the same machine — and a server can do one
+ * without the other.
+ */
+export interface ServingReadiness {
+    can_serve: boolean;
+    /** What blocks publishing. Null when it is possible. */
+    reason: string | null;
+}
+
+/**
+ * How far a run's adapter got towards being served locally.
+ *
+ * Separate from the run's own status because they are different jobs with
+ * different failure modes: a run can train perfectly and fail to publish.
+ */
+export type ServeStatus = "publishing" | "served" | "failed";
+
 /** One fine-tuning run: uploads -> dataset -> Kaggle GPU -> LoRA adapter. */
 export interface TrainingRun {
     id: string;
@@ -66,6 +88,17 @@ export interface TrainingRun {
     kernel_ref: string | null;
     /** Whether the download button has anything to fetch. */
     has_model: boolean;
+    /**
+     * How far publishing this run to the local model runtime got.
+     *
+     * Null means never attempted — a different thing from "failed", which is
+     * why this is nullable rather than defaulted.
+     */
+    serve_status: ServeStatus | null;
+    /** One line for `serve_status`. On failure it names what to do. */
+    serve_detail: string | null;
+    /** The name it is registered under in the runtime, once served. */
+    served_model: string | null;
     /** Accumulated stage output, capped server-side. */
     log: string;
     created_at: string;

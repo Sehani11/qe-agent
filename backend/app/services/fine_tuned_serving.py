@@ -51,7 +51,7 @@ def _root(url: str) -> str | None:
     return urlunsplit((parts.scheme, netloc, "", "", ""))
 
 
-async def _health() -> dict[str, object] | None:
+async def health() -> dict[str, object] | None:
     """Fetch the shim's `/health`, or None if there is nothing to fetch it from."""
     root = _root(settings.fine_tuned_model_endpoint or "")
     if root is None:
@@ -67,7 +67,7 @@ async def _health() -> dict[str, object] | None:
     return body if isinstance(body, dict) else None
 
 
-async def _model_exists(runtime: str, model: str) -> bool | None:
+async def model_exists(runtime: str, model: str) -> bool | None:
     """Is `model` actually loaded in the runtime? None if that cannot be told.
 
     The question `/health` does NOT answer. `MODEL_NAME` there is the shim's
@@ -110,7 +110,7 @@ async def status() -> dict[str, object]:
             "detail": "No fine-tuned endpoint is configured on this server.",
         }
 
-    body = await _health()
+    body = await health()
     if body is None:
         return {
             "available": False,
@@ -132,7 +132,7 @@ async def status() -> dict[str, object]:
     # only evidence available.
     runtime = body.get("ollama")
     if isinstance(runtime, str) and runtime:
-        exists = await _model_exists(runtime, model)
+        exists = await model_exists(runtime, model)
         if exists is False:
             return {
                 "available": False,
@@ -165,7 +165,7 @@ async def purge_served_model() -> str | None:
     Best-effort and never raises — the caller is a wipe that has already
     committed.
     """
-    body = await _health()
+    body = await health()
     if body is None:
         return None
 

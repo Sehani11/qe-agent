@@ -58,7 +58,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 import httpx
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 
@@ -540,6 +540,51 @@ async def health(refresh: bool = False) -> dict[str, object]:
         "chat_template": verdict,
         "chat_template_checked_at": _template_checked_at,
     }
+
+
+class AdapterSwitch(BaseModel):
+    """Where to read the training template from, after a new publish."""
+
+    adapter_dir: str
+
+
+@app.post("/adapter")
+async def switch_adapter(body: AdapterSwitch) -> dict[str, object]:
+    """Point the template check at a different run's output, without a restart.
+
+    ADAPTER_DIR is read once at import, which was fine when a human edited
+    .env and restarted. Publishing a run from the app made that the last manual
+    step in an otherwise one-click flow: the new model was registered and
+    served, but /health kept verifying against the previous run's template and
+    reported `unknown`.
+
+    Only the template source moves. MODEL_NAME deliberately does not: a publish
+    registers under the name this shim already serves, so there is nothing to
+    change, and a shim that could be told to serve an arbitrary model is a
+    bigger thing than this needs to be.
+
+    Confined to the repo for the same reason `resolved_adapter` is in the
+    backend: this endpoint has no auth, and a path it accepts is a path it will
+    read.
+    """
+    global ADAPTER_DIR
+
+    candidate = Path(body.adapter_dir)
+    if not candidate.is_absolute():
+        candidate = REPO_ROOT / candidate
+    resolved = candidate.resolve()
+    if not resolved.is_relative_to(REPO_ROOT.resolve()):
+        raise HTTPException(
+            status_code=400,
+            detail="adapter_dir must be inside the repository.",
+        )
+    if not resolved.is_dir():
+        raise HTTPException(status_code=404, detail=f"No directory at {resolved}.")
+
+    ADAPTER_DIR = resolved
+    logger.info("adapter dir switched to %s", ADAPTER_DIR)
+    verdict = await refresh_template_verdict()
+    return {"adapter_dir": str(ADAPTER_DIR), "chat_template": verdict}
 
 
 @app.post("/")

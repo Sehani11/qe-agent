@@ -6,7 +6,12 @@ readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
     "fastapi[standard]>=0.115.0",
-    "sqlalchemy>=2.0.0",
+    # [asyncio] pulls greenlet, which create_async_engine needs at import.
+    # Plain `sqlalchemy` only requires it under a platform_machine marker that
+    # lists x86_64/AMD64 and friends but not ARM64 — so the backend installed
+    # and then died with "No module named 'greenlet'" on a Windows-on-ARM
+    # machine while working everywhere else. The extra states the real need.
+    "sqlalchemy[asyncio]>=2.0.0",
     "asyncpg>=0.30.0",
     "alembic>=1.14.0",
     "pinecone>=6.0.0",

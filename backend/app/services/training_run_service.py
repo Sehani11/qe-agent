@@ -701,7 +701,7 @@ async def start_run(user_id: str, db: AsyncSession) -> TrainingRun:
 _MAX_ZIP_BYTES = 500 * 1024 * 1024
 
 
-def _resolved_adapter(adapter_dir: str) -> Path | None:
+def resolved_adapter(adapter_dir: str) -> Path | None:
     """Resolve `adapter_dir` under the repo root, or None if it is not there.
 
     The path comes from a database column, but a column is not a promise —
@@ -723,7 +723,7 @@ def zip_adapter(adapter_dir: str) -> tuple[bytes, str]:
     megabytes, and a temporary file would need cleaning up on a path where the
     client can disconnect mid-download.
     """
-    resolved = _resolved_adapter(adapter_dir)
+    resolved = resolved_adapter(adapter_dir)
     if resolved is None:
         raise TrainingRunError("The trained model is no longer on this server.")
 
@@ -755,7 +755,7 @@ def discard_adapter(adapter_dir: str | None) -> None:
     """
     if not adapter_dir:
         return
-    resolved = _resolved_adapter(adapter_dir)
+    resolved = resolved_adapter(adapter_dir)
     if resolved is None:
         return
     try:
