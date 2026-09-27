@@ -103,9 +103,9 @@ which runs on Kaggle's GPU) or copy a `training/outputs/run-*` folder across.
 - **From the app (easiest).** Start the shim below, then press **Serve this
   run** on a completed run. It converts the adapter, registers it, and repoints
   the shim — no commands. It needs the conversion toolchain on this machine
-  (`llama.cpp` clone + an isolated `convert-venv`, set up as described in
-  [training/serve/README.md](training/serve/README.md)); without it the button
-  is hidden and the Training panel says why.
+  (`llama.cpp` + an isolated `convert-venv`) — see
+  [the next section](#the-conversion-toolchain-needed-for-serve-this-run).
+  Without it the button is hidden and the panel says why.
 - **By hand.** Convert the adapter to GGUF and `ollama create` — the full
   sequence, and the reasons each step is the way it is, are in
   [training/serve/README.md](training/serve/README.md).
@@ -120,6 +120,46 @@ bdd-lora-1.5b" while this machine's Ollama has never heard of it. The app checks
 the runtime rather than trusting the row, so the toggle will say *"… is no
 longer loaded in the model runtime"*. That is the expected message, not a fault
 — register the adapter here and it clears.
+
+#### The conversion toolchain (needed for "Serve this run")
+
+If the Training panel says *"Trained models cannot be served from this
+machine"*, this is what is missing. Two directories, both at the **repository
+root** and both gitignored, so every machine sets them up once:
+
+```powershell
+cd e:\Projects\Python\qe-agent-v2         # the repo root, NOT beside it
+
+git clone --depth 1 https://github.com/ggml-org/llama.cpp
+
+uv venv convert-venv --python 3.12
+uv pip install --python convert-venv/Scripts/python.exe `
+  --index-strategy unsafe-best-match `
+  --extra-index-url https://download.pytorch.org/whl/cpu `
+  "torch==2.11.0" "transformers==4.57.6" "numpy~=1.26.4" `
+  "sentencepiece>=0.1.98,<0.3.0" "gguf>=0.1.0" "protobuf>=4.21.0,<5.0.0"
+```
+
+Reload the Fine tune page and **Serve this run** appears on completed runs.
+
+Four things that are easy to get wrong:
+
+- **Both go at the repo root**, inside the working tree — the backend looks for
+  `<repo>/llama.cpp/convert_lora_to_gguf.py` and `<repo>/convert-venv`. Cloned
+  as a sibling, they are not found.
+- **`--index-strategy unsafe-best-match` is required.** Without it uv refuses
+  `transformers==4.57.6`, because llama.cpp's requirements list a PyTorch index
+  first and uv will not cross indexes by default. The install then resolves to
+  nothing and the converter fails with `ModuleNotFoundError: transformers`.
+- **Never install these into `backend/.venv`.** The converter pins
+  `numpy~=1.26.4`, which conflicts with the backend's stack. That is the whole
+  reason it is a separate venv.
+- **It is large** — roughly 208 MB for llama.cpp and 664 MB for the venv, mostly
+  CPU torch. Skip it on any machine that only needs to run the app.
+
+Without this the app is fully usable: training, downloading the adapter and
+everything outside the Fine tune page work unchanged. Only in-app publishing to
+Ollama is unavailable, and the panel says so rather than hiding the reason.
 
 #### Running the shim
 
