@@ -28,6 +28,12 @@ let startState: { mutate: typeof startMutate; isPending: boolean };
 
 const deleteRunMutate = vi.fn();
 const clearFinishedMutate = vi.fn();
+const publishMutate = vi.fn();
+// Publishing is possible by default so the button is present in most tests;
+// the blocked case sets this and asserts it disappears.
+let servingState: { data: { can_serve: boolean; reason: string | null } } = {
+    data: { can_serve: true, reason: null },
+};
 
 vi.mock("@/lib/hooks/useTrainingData", () => ({
     useTrainingReadiness: () => readinessState,
@@ -39,6 +45,8 @@ vi.mock("@/lib/hooks/useTrainingData", () => ({
         mutate: clearFinishedMutate,
         isPending: false,
     }),
+    useServingReadiness: () => servingState,
+    usePublishTrainingRun: () => ({ mutate: publishMutate, isPending: false }),
 }));
 
 function makeRun(overrides: Partial<TrainingRun> = {}): TrainingRun {
@@ -50,6 +58,9 @@ function makeRun(overrides: Partial<TrainingRun> = {}): TrainingRun {
         holdout_pairs: 20,
         kernel_ref: "someone/bdd-fine-tune",
         has_model: true,
+        serve_status: null,
+        serve_detail: null,
+        served_model: null,
         log: "$ build_dataset.py\nWrote 182 train / 20 holdout pairs\n",
         created_at: "2026-08-24T00:00:00Z",
         completed_at: "2026-08-24T01:00:00Z",
@@ -71,6 +82,7 @@ beforeEach(() => {
     };
     runsState = { data: [], isLoading: false, isError: false };
     startState = { mutate: startMutate, isPending: false };
+    servingState = { data: { can_serve: true, reason: null } };
 });
 
 // ---------------------------------------------------------------------------
@@ -401,5 +413,166 @@ describe("clearing finished runs", () => {
         fireEvent.click(within(dialog).getByRole("button", { name: /delete all/i }));
 
         expect(clearFinishedMutate).toHaveBeenCalledTimes(1);
+    });
+});
+
+
+// ---------------------------------------------------------------------------
+// Publishing a run to the local model runtime
+// ---------------------------------------------------------------------------
+
+describe("publishing a run", () => {
+    const serveButton = () =>
+        screen.getByRole("button", { name: /serve this run/i });
+
+    it("offers the button on a run that produced an adapter", () => {
+        runsState.data = [makeRun()];
+        render(<TrainingRunsPanel datasetCount={2} />);
+
+        expect(serveButton()).toBeInTheDocument();
+    });
+
+    it("publishes the run that was clicked", () => {
+        runsState.data = [makeRun({ id: "run-7" })];
+        render(<TrainingRunsPanel datasetCount={2} />);
+
+        fireEvent.click(serveButton());
+
+        expect(publishMutate).toHaveBeenCalledTimes(1);
+        expect(publishMutate.mock.calls[0][0]).toBe("run-7");
+    });
+
+    it("says nothing about publishing on a run with no adapter", () => {
+        // A failed run has no model to serve, so the button would be a lie.
+        runsState.data = [makeRun({ status: "failed", has_model: false })];
+        render(<TrainingRunsPanel datasetCount={2} />);
+
+        expect(
+            screen.queryByRole("button", { name: /serve this run/i })
+        ).not.toBeInTheDocument();
+    });
+
+    it("hides the button when the server cannot publish at all", () => {
+        // Hidden rather than disabled: the blocker is server setup nobody can
+        // fix from this row, so a per-row control has nothing to offer.
+        servingState = {
+            data: { can_serve: false, reason: "The GGUF converter is not available." },
+        };
+        runsState.data = [makeRun()];
+        render(<TrainingRunsPanel datasetCount={2} />);
+
+        expect(
+            screen.queryByRole("button", { name: /serve this run/i })
+        ).not.toBeInTheDocument();
+        // Downloading the adapter still works — it needs none of that toolchain.
+        expect(
+            screen.getByRole("button", { name: /download model/i })
+        ).toBeInTheDocument();
+    });
+
+    it("shows progress in the row, which outlives the click", () => {
+        runsState.data = [
+            makeRun({
+                serve_status: "publishing",
+                serve_detail: "Converting the adapter for qwen2.5:1.5b-instruct…",
+            }),
+        ];
+        render(<TrainingRunsPanel datasetCount={2} />);
+
+        expect(
+            screen.getByText(/converting the adapter for qwen2\.5/i)
+        ).toBeInTheDocument();
+    });
+
+    it("keeps the button out of reach while a publish is running", () => {
+        runsState.data = [makeRun({ serve_status: "publishing", serve_detail: "Queued" })];
+        render(<TrainingRunsPanel datasetCount={2} />);
+
+        expect(serveButton()).toBeDisabled();
+    });
+
+    it("says which run the app is serving once one succeeds", () => {
+        runsState.data = [
+            makeRun({
+                serve_status: "served",
+                served_model: "bdd-lora-1.5b",
+                serve_detail: "Serving bdd-lora-1.5b from this run.",
+            }),
+        ];
+        render(<TrainingRunsPanel datasetCount={2} />);
+
+        expect(screen.getByText(/serving bdd-lora-1\.5b from this run/i)).toBeInTheDocument();
+        // Offered again, because re-publishing after a retrain is the normal case.
+        expect(screen.getByRole("button", { name: /re-serve/i })).toBeInTheDocument();
+    });
+
+    it("surfaces a publish failure without touching the run's own status", () => {
+        // A run that trained fine and failed to publish is a real state, and
+        // the training badge must keep saying the training went well.
+        runsState.data = [
+            makeRun({
+                serve_status: "failed",
+                serve_detail: "The base model qwen2.5:1.5b-instruct is not in the runtime.",
+            }),
+        ];
+        render(<TrainingRunsPanel datasetCount={2} />);
+
+        expect(
+            screen.getByText(/base model qwen2\.5:1\.5b-instruct is not in the runtime/i)
+        ).toBeInTheDocument();
+        expect(screen.getByText("Trained")).toBeInTheDocument();
+    });
+});
+
+
+// ---------------------------------------------------------------------------
+// What the confirmation warns about
+// ---------------------------------------------------------------------------
+//
+// The cost sentence is the reason this confirmation exists, and it is only true
+// for .feature uploads: those carry Gherkin with no acceptance criteria, so the
+// builder pays an LLM to write the criteria backwards. Pairs (.jsonl, and the
+// .csv that converts to it) arrive complete and skip that entirely. Warning
+// about money on a run that spends none is how people learn to click past the
+// warning on the run that does.
+
+describe("the cost warning", () => {
+    it("names the LLM cost when feature files will be back-generated", () => {
+        render(<TrainingRunsPanel datasetCount={3} featureCount={2} />);
+
+        fireEvent.click(trainButton());
+
+        const dialog = screen.getByRole("dialog");
+        expect(within(dialog).getByText(/2 feature files/i)).toBeInTheDocument();
+        expect(within(dialog).getByText(/costs money/i)).toBeInTheDocument();
+    });
+
+    it("says no LLM call is needed when every upload is already a pair", () => {
+        render(<TrainingRunsPanel datasetCount={2} featureCount={0} />);
+
+        fireEvent.click(trainButton());
+
+        const dialog = screen.getByRole("dialog");
+        expect(within(dialog).getByText(/no llm calls are needed/i)).toBeInTheDocument();
+        expect(within(dialog).queryByText(/costs money/i)).not.toBeInTheDocument();
+    });
+
+    it("still warns about the quota and the one-way door either way", () => {
+        render(<TrainingRunsPanel datasetCount={2} featureCount={0} />);
+
+        fireEvent.click(trainButton());
+
+        const dialog = screen.getByRole("dialog");
+        expect(within(dialog).getByText(/kaggle gpu quota/i)).toBeInTheDocument();
+        expect(within(dialog).getByText(/cannot be cancelled/i)).toBeInTheDocument();
+    });
+
+    it("counts a single feature file in the singular", () => {
+        render(<TrainingRunsPanel datasetCount={2} featureCount={1} />);
+
+        fireEvent.click(trainButton());
+
+        const dialog = screen.getByRole("dialog");
+        expect(within(dialog).getByText(/1 feature file[^s]/i)).toBeInTheDocument();
     });
 });

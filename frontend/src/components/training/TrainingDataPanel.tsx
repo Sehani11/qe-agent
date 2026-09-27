@@ -23,7 +23,7 @@ import { SkeletonRows } from "@/components/ui/loaders";
 import { useToast } from "@/components/ui/toast";
 
 const MAX_BYTES = 10 * 1024 * 1024; // 10 MB — matches backend _MAX_UPLOAD_BYTES
-const ACCEPT_RE = /\.(feature|jsonl)$/i;
+const ACCEPT_RE = /\.(feature|jsonl|csv)$/i;
 
 function ErrorNote({ message }: { message: string }) {
     return (
@@ -48,7 +48,7 @@ export default function TrainingDataPanel() {
     const downloadSample = useDownloadSampleDataset();
     const toast = useToast();
 
-    const handleDownloadSample = (kind: "jsonl" | "feature") => {
+    const handleDownloadSample = (kind: "jsonl" | "feature" | "csv") => {
         downloadSample.mutate(kind, {
             onError: () => {
                 toast.error("Could not download the sample", {
@@ -66,12 +66,14 @@ export default function TrainingDataPanel() {
     const handleSubmit = (e: React.FormEvent) => {
         e.preventDefault();
         if (files.length === 0) {
-            setValidation("Choose at least one .feature or .jsonl file.");
+            setValidation("Choose at least one .csv, .feature or .jsonl file.");
             return;
         }
         const badName = files.find((f) => !ACCEPT_RE.test(f.name));
         if (badName) {
-            setValidation(`${badName.name}: only .feature and .jsonl files are supported.`);
+            setValidation(
+                `${badName.name}: only .csv, .feature and .jsonl files are supported.`
+            );
             return;
         }
         const tooBig = files.find((f) => f.size > MAX_BYTES);
@@ -142,23 +144,39 @@ export default function TrainingDataPanel() {
                     <h2 className="text-sm">Upload training data</h2>
                 </div>
                 <p className="text-xs leading-relaxed text-muted-foreground">
-                    Add <code className="font-mono text-foreground">.feature</code> files or a{" "}
+                    Add a <code className="font-mono text-foreground">.csv</code> of tickets
+                    written in a spreadsheet,{" "}
+                    <code className="font-mono text-foreground">.feature</code> files, or a{" "}
                     <code className="font-mono text-foreground">.jsonl</code> dataset of
                     training pairs (max 10 MB each). Each file is checked with the same
                     rules the dataset builder applies, so anything accepted here is usable
                     for training.
                 </p>
 
-                {/* Samples sit above the file picker, not below it: the accepted
-                    shape of a .jsonl pair is not guessable — the assistant side
-                    has to be a JSON object encoded as a string — and a worked
+                {/* Samples sit above the file picker, not below it: neither
+                    accepted shape is guessable — a .jsonl pair's assistant side
+                    has to be a JSON object encoded as a string, and the CSV's
+                    columns carry rules a blank grid cannot state — and a worked
                     example is faster to copy than the rules are to read. The
                     server generates these from the same constants that validate
-                    an upload, so what downloads here is always accepted here. */}
+                    an upload, so what downloads here is always accepted here.
+
+                    CSV comes first because it is the one to start from unless
+                    you are already holding Gherkin or hand-written pairs. */}
                 <div className="flex flex-wrap items-center gap-2 rounded-md border border-dashed border-rule bg-surface-raised/60 px-3 py-2.5">
                     <span className="mr-1 text-xs text-muted-foreground">
                         Not sure of the format? Start from a sample:
                     </span>
+                    <Button
+                        type="button"
+                        size="sm"
+                        variant="outline"
+                        onClick={() => handleDownloadSample("csv")}
+                        disabled={downloadSample.isPending}
+                    >
+                        <Download className="h-3.5 w-3.5" aria-hidden="true" />
+                        sample.csv
+                    </Button>
                     <Button
                         type="button"
                         size="sm"
@@ -169,7 +187,7 @@ export default function TrainingDataPanel() {
                         <Download className="h-3.5 w-3.5" aria-hidden="true" />
                         sample.jsonl
                     </Button>
-                    <Button
+                    {/* <Button
                         type="button"
                         size="sm"
                         variant="outline"
@@ -178,7 +196,7 @@ export default function TrainingDataPanel() {
                     >
                         <Download className="h-3.5 w-3.5" aria-hidden="true" />
                         sample.feature
-                    </Button>
+                    </Button> */}
                 </div>
 
                 <div className="flex flex-col gap-3 sm:flex-row sm:items-center">
@@ -186,7 +204,7 @@ export default function TrainingDataPanel() {
                         ref={fileInputRef}
                         type="file"
                         multiple
-                        accept=".feature,.jsonl"
+                        accept=".csv,.feature,.jsonl"
                         aria-label="Training data files"
                         onChange={(e) => {
                             setFiles(Array.from(e.target.files ?? []));

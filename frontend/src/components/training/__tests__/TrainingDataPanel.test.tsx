@@ -116,7 +116,7 @@ describe("upload", () => {
 
         expect(uploadMutate).not.toHaveBeenCalled();
         expect(
-            screen.getByText(/choose at least one .feature or .jsonl file/i)
+            screen.getByText(/choose at least one .csv, .feature or .jsonl file/i)
         ).toBeInTheDocument();
     });
 
@@ -127,7 +127,9 @@ describe("upload", () => {
         fireEvent.click(screen.getByRole("button", { name: "Upload" }));
 
         expect(uploadMutate).not.toHaveBeenCalled();
-        expect(screen.getByText(/only .feature and .jsonl/i)).toBeInTheDocument();
+        expect(
+            screen.getByText(/only .csv, .feature and .jsonl/i)
+        ).toBeInTheDocument();
     });
 
     it("rejects a file over the size limit before hitting the network", () => {
@@ -163,7 +165,7 @@ describe("upload", () => {
         fireEvent.click(screen.getByRole("button", { name: "Upload" }));
         expect(uploadMutate).toHaveBeenCalledTimes(1);
         expect(
-            screen.getByText(/choose at least one .feature or .jsonl file/i)
+            screen.getByText(/choose at least one .csv, .feature or .jsonl file/i)
         ).toBeInTheDocument();
     });
 
@@ -293,24 +295,29 @@ describe("delete", () => {
 // ---------------------------------------------------------------------------
 
 describe("sample datasets", () => {
-    it("offers a sample in each accepted format", () => {
+    it("offers a sample in each format it points people at", () => {
+        // The .feature sample button is commented out in the panel; uploads
+        // still accept .feature, but the authoring routes on offer are the two
+        // pair formats.
         render(<TrainingDataPanel />);
 
         expect(
             screen.getByRole("button", { name: /sample\.jsonl/i })
         ).toBeInTheDocument();
         expect(
-            screen.getByRole("button", { name: /sample\.feature/i })
+            screen.getByRole("button", { name: /sample\.csv/i })
         ).toBeInTheDocument();
     });
 
     it("asks the server for the format that was clicked", () => {
+        // CSV exists so a ticket can be authored without hand-writing JSON, so
+        // this button is the one a newcomer is most likely to press.
         render(<TrainingDataPanel />);
 
-        fireEvent.click(screen.getByRole("button", { name: /sample\.feature/i }));
+        fireEvent.click(screen.getByRole("button", { name: /sample\.csv/i }));
 
         expect(downloadSampleMutate).toHaveBeenCalledTimes(1);
-        expect(downloadSampleMutate.mock.calls[0][0]).toBe("feature");
+        expect(downloadSampleMutate.mock.calls[0][0]).toBe("csv");
     });
 
     it("defaults to the pairs format, which is the one worth showing", () => {

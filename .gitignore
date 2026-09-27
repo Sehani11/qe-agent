@@ -40,3 +40,15 @@ training/corpus-product/*.jsonl
 training/.kaggle-staging/
 # Trained adapters pulled back from Kaggle (161 MB safetensors).
 training/outputs/
+
+# The GGUF conversion toolchain, set up by hand next to the repo rather than
+# vendored — see training/serve/README.md. Both are large (208 MB / 664 MB)
+# and neither is ours: llama.cpp is a third-party clone carrying its own
+# licence, and convert-venv pins numpy~=1.26.4 for the converter alone, which
+# is exactly why it is not backend/.venv.
+llama.cpp/
+# uv writes a .gitignore inside a venv it creates, so this is belt and braces
+# — but a venv built another way, or copied, would not carry one.
+convert-venv/
+
+dev-docs/

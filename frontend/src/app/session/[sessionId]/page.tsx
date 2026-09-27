@@ -10,9 +10,9 @@ import { useSession, useSessionBDD, useSessionVerificationResults } from "@/lib/
 import { useRunVerification } from "@/lib/hooks/useRunVerification";
 import apiClient from "@/lib/api/client";
 import AppNav from "@/components/layout/AppNav";
-// TODO(fine-tune): re-enable once the fine-tune feature is turned back on. See TODO.md.
-// import FineTunedToggle from "@/components/model/FineTunedToggle";
+import FineTunedToggle from "@/components/model/FineTunedToggle";
 import { useActiveProjectId } from "@/lib/stores/projectStore";
+// TODO(training-opt-in): consent toggle temporarily hidden — see TODO.md.
 // import TrainingOptInToggle from "@/components/model/TrainingOptInToggle";
 import { Button } from "@/components/ui/button";
 import { ConfirmModal } from "@/components/ui/confirm-modal";
@@ -560,13 +560,13 @@ export default function SessionPipelinePage() {
                         )}
                     </div>
 
-                    {/* Which model generates, and whether what it produces may
-                        train a future one — both belong to the capture.
-                        TODO(fine-tune): toggles temporarily disabled — see TODO.md. */}
-                    {/* <div className="mt-2.5 flex flex-wrap items-start gap-x-6 gap-y-2">
+                    {/* Which model generates. The consent toggle that sat beside
+                        it — whether what this produces may train a future model —
+                        is hidden for now; see TODO(training-opt-in) in TODO.md.
+                        Restore <TrainingOptInToggle /> inside this row. */}
+                    <div className="mt-2.5 flex flex-wrap items-start gap-x-6 gap-y-2">
                         <FineTunedToggle />
-                        <TrainingOptInToggle />
-                    </div> */}
+                    </div>
 
                     {ticketInputError && (
                         <p id="ticket-input-error" className="mt-2 text-xs text-fail-ink" role="alert">

@@ -49,6 +49,24 @@ class TrainingUploadResponse(BaseModel):
     rejected: list[RejectedFile] = []
 
 
+class ServingReadiness(BaseModel):
+    """Whether this server can publish a finished adapter to a model runtime.
+
+    Separate from `TrainingReadiness` because the prerequisites are unrelated:
+    training needs Kaggle credentials and a network, publishing needs a local
+    converter toolchain and a runtime on this machine. A server can easily do
+    one and not the other, and one combined answer could not say which.
+    """
+
+    can_serve: bool
+    reason: str | None = Field(
+        None,
+        description=(
+            "What blocks publishing, shown verbatim. None when it is possible."
+        ),
+    )
+
+
 class TrainingRunResponse(BaseModel):
     """One fine-tuning run.
 
@@ -78,6 +96,18 @@ class TrainingRunResponse(BaseModel):
     #: client only needs to know whether the download button has anything to
     #: fetch. `GET /training/runs/{id}/model` resolves it.
     has_model: bool = False
+
+    #: How far publishing this run's adapter to the local model runtime got.
+    #: None means never attempted, which is a different thing from failed and
+    #: is why this is not defaulted to a string.
+    serve_status: str | None = Field(
+        None, description="publishing | served | failed, or null if never tried."
+    )
+    #: One line for `serve_status`, shown verbatim. On failure it names the
+    #: command to run or the tool to install.
+    serve_detail: str | None = None
+    #: The name the adapter is registered under in the runtime, once served.
+    served_model: str | None = None
     log: str = ""
     created_at: datetime
     completed_at: datetime | None = None

@@ -17,6 +17,9 @@ import pytest
 from app.services.training_data_service import (
     MAX_FILE_CHARS,
     MAX_OUTLINE_EXPANSIONS,
+    MAX_SCENARIOS,
+    MAX_STEP_CHARS,
+    MIN_STEP_CHARS,
     REASON_INCOMPLETE_STEPS,
     REASON_MESSAGES,
     REASON_NO_SCENARIOS,
@@ -27,9 +30,12 @@ from app.services.training_data_service import (
     TrainingDataError,
     feature_doc_from_json,
     pair_fingerprint,
+    parse_csv_records,
+    parse_csv_tickets,
     parse_feature,
     quality_reason,
     reject_unsafe_filename,
+    ticket_warnings,
     validate_jsonl,
     validate_upload,
 )
@@ -688,3 +694,352 @@ def test_a_plain_scenario_alongside_an_outline_still_parses():
     titles = [s.title for s in doc.scenarios]
     assert "an ordinary scenario" in titles
     assert len(doc.scenarios) == 2
+
+
+# ---------------------------------------------------------------------------
+# CSV authoring format
+# ---------------------------------------------------------------------------
+#
+# CSV exists so a ticket can be authored in a spreadsheet instead of by hand in
+# JSONL. It is converted to pairs at upload and never stored as CSV, so these
+# tests pin two things: that a spreadsheet's habits (fill-down, blank rows, a
+# BOM) are read the way an author expects, and that every rejection names the
+# row number the author can actually see.
+
+CSV_HEADER = (
+    "ticket_id,feature,title,as_a,i_want,so_that,description,"
+    "ac_number,ac_text,scenario,given,when,then"
+)
+
+
+def _csv_row(
+    ticket_id="T-1",
+    feature="Sign in",
+    title="Sign in with email and password",
+    as_a="registered user",
+    i_want="to sign in with my email and password",
+    so_that="I can reach my dashboard",
+    description="The sign-in form takes an email and a password.",
+    ac_number="1",
+    ac_text="A correct email and password signs the user in.",
+    scenario="Correct credentials sign the user in",
+    given="a registered user is on the sign-in page",
+    when="they submit their correct email and password",
+    then="they are signed in and land on their dashboard",
+):
+    """One CSV row, quoted as csv.writer would. Defaults are a valid scenario."""
+    cells = [
+        ticket_id,
+        feature,
+        title,
+        as_a,
+        i_want,
+        so_that,
+        description,
+        ac_number,
+        ac_text,
+        scenario,
+        given,
+        when,
+        then,
+    ]
+    return ",".join(f'"{c}"' for c in cells)
+
+
+def _csv(*rows):
+    return CSV_HEADER + "\n" + "\n".join(rows) + "\n"
+
+
+GOOD_CSV = _csv(
+    _csv_row(),
+    _csv_row(
+        ticket_id="T-1",
+        feature="",
+        title="",
+        as_a="",
+        i_want="",
+        so_that="",
+        description="",
+        ac_number="2",
+        ac_text="A wrong password is refused without saying whether the email exists.",
+        scenario="A wrong password is rejected",
+        given="a registered user is on the sign-in page",
+        when="they submit their email with the wrong password",
+        then="they stay on the page and are told the credentials did not match",
+    ),
+)
+
+
+def test_a_valid_csv_becomes_one_pair_per_ticket():
+    records = parse_csv_records(GOOD_CSV)
+    assert len(records) == 1
+
+    record = records[0]
+    roles = [m["role"] for m in record["messages"]]
+    assert roles == ["system", "user", "assistant"]
+
+    # The assistant side must be a JSON STRING the served provider can parse.
+    target = json.loads(record["messages"][2]["content"])
+    assert len(target["scenarios"]) == 2
+
+
+def test_ticket_columns_are_inherited_by_later_rows():
+    """Blank ticket cells on a continuation row reuse the group's first row.
+
+    This is the rule an author is least likely to guess, and the one a
+    spreadsheet's fill-down makes natural.
+    """
+    ticket = parse_csv_tickets(GOOD_CSV)[0]
+    assert ticket["title"] == "Sign in with email and password"
+    assert [s["clause"] for s in ticket["scenarios"]] == [1, 2]
+    assert len(ticket["acceptance_criteria"]) == 2
+
+
+def test_the_user_side_numbers_every_criterion():
+    """The rendered ticket must carry "AC<n>:" labels.
+
+    `ac_clauses()` in evaluation_metrics.py matches clauses by that label, so a
+    ticket rendered without them yields zero clauses and silently disables the
+    coverage metric.
+    """
+    prompt = parse_csv_records(GOOD_CSV)[0]["messages"][1]["content"]
+    assert "Acceptance Criteria:" in prompt
+    assert "AC1: A correct email and password signs the user in." in prompt
+    assert "AC2: A wrong password is refused" in prompt
+
+
+def test_traceability_carries_the_label_and_the_sentence():
+    target = json.loads(parse_csv_records(GOOD_CSV)[0]["messages"][2]["content"])
+    clause = target["scenarios"][0]["source_ac_clause"]
+    assert clause.startswith("AC1: ")
+    assert "signs the user in" in clause
+
+
+def test_origin_is_the_ticket_id_so_the_split_groups_by_ticket():
+    """One ticket is one origin.
+
+    The train/holdout split is by origin, and `process_upload_rows` reads this
+    value back off the stored line. Scenarios of one ticket are related, so
+    splitting them across the boundary would leak.
+    """
+    assert parse_csv_records(GOOD_CSV)[0]["meta"]["origin"] == "T-1"
+
+
+def test_two_tickets_become_two_pairs():
+    text = _csv(_csv_row(), _csv_row(ticket_id="T-2", feature="Sign out"))
+    records = parse_csv_records(text)
+    assert [r["meta"]["origin"] for r in records] == ["T-1", "T-2"]
+
+
+def test_a_conflicting_ticket_cell_is_refused_naming_the_row():
+    """A filled cell that disagrees with the group means two rows describe one
+    ticket two ways; keeping the first would train on whichever sorted first."""
+    text = _csv(_csv_row(), _csv_row(title="A different title", ac_number="2"))
+    with pytest.raises(TrainingDataError) as exc:
+        parse_csv_tickets(text)
+    assert exc.value.line_number == 3
+    assert "'title'" in exc.value.message
+
+
+def test_a_row_with_no_scenario_declares_an_uncovered_criterion():
+    """Legal, and warned about rather than refused — an uncovered clause makes a
+    worse example, not an invalid one."""
+    text = _csv(
+        _csv_row(),
+        _csv_row(
+            feature="",
+            title="",
+            as_a="",
+            i_want="",
+            so_that="",
+            description="",
+            ac_number="2",
+            ac_text="Sessions expire after thirty days.",
+            scenario="",
+            given="",
+            when="",
+            then="",
+        ),
+    )
+    ticket = parse_csv_tickets(text)[0]
+    assert len(ticket["acceptance_criteria"]) == 2
+    assert len(ticket["scenarios"]) == 1
+    assert any("AC2" in w for w in ticket_warnings(ticket))
+    # It still reaches the user side of the pair: a real ticket lists the
+    # criterion whether or not anyone wrote a scenario for it.
+    assert "AC2: Sessions expire after thirty days." in (
+        parse_csv_records(text)[0]["messages"][1]["content"]
+    )
+
+
+def test_a_half_filled_scenario_is_refused():
+    text = _csv(_csv_row(then=""))
+    with pytest.raises(TrainingDataError) as exc:
+        parse_csv_tickets(text)
+    assert exc.value.line_number == 2
+    assert "then" in exc.value.message
+
+
+def test_gaps_in_the_criterion_numbering_are_refused():
+    """A gap would print AC1/AC2 for criteria the scenarios cite as AC1/AC3,
+    misattributing every clause after the gap."""
+    text = _csv(_csv_row(), _csv_row(ac_number="3", title="", feature=""))
+    with pytest.raises(TrainingDataError) as exc:
+        parse_csv_tickets(text)
+    assert "no gaps" in exc.value.message
+
+
+def test_one_number_cannot_carry_two_criteria():
+    text = _csv(_csv_row(), _csv_row(ac_text="Something else entirely.", title=""))
+    with pytest.raises(TrainingDataError) as exc:
+        parse_csv_tickets(text)
+    assert exc.value.line_number == 3
+
+
+def test_a_non_numeric_ac_number_is_refused():
+    with pytest.raises(TrainingDataError) as exc:
+        parse_csv_tickets(_csv(_csv_row(ac_number="one")))
+    assert exc.value.line_number == 2
+
+
+def test_a_missing_ticket_level_cell_on_the_first_row_is_refused():
+    with pytest.raises(TrainingDataError) as exc:
+        parse_csv_tickets(_csv(_csv_row(as_a="")))
+    assert "'as_a'" in exc.value.message
+    assert exc.value.line_number == 2
+
+
+def test_row_numbers_count_the_header_so_they_match_the_spreadsheet():
+    """The first data row is row 2, which is what the author sees in the gutter.
+    An index into the data rows would send them to the wrong line."""
+    text = _csv(_csv_row(), _csv_row(ac_number="2", ac_text="", title=""))
+    with pytest.raises(TrainingDataError) as exc:
+        parse_csv_tickets(text)
+    assert exc.value.line_number == 3
+    assert "Row 3" in exc.value.message
+
+
+def test_blank_rows_between_groups_are_skipped():
+    """Spreadsheets leave trailing blank lines on export, and a blank line
+    between tickets is a reasonable thing for an author to add."""
+    text = CSV_HEADER + "\n" + _csv_row() + "\n,,,,,,,,,,,,\n\n"
+    assert len(parse_csv_records(text)) == 1
+
+
+def test_a_missing_column_names_what_is_missing():
+    text = "ticket_id,feature\nT-1,Sign in\n"
+    with pytest.raises(TrainingDataError) as exc:
+        parse_csv_tickets(text)
+    assert "ac_number" in exc.value.message
+
+
+def test_a_semicolon_export_says_so():
+    """The message an Excel user in a semicolon locale needs, rather than
+    "column 'ticket_id' is missing", which is true and useless."""
+    text = CSV_HEADER.replace(",", ";") + "\n" + _csv_row().replace(",", ";") + "\n"
+    with pytest.raises(TrainingDataError) as exc:
+        parse_csv_tickets(text)
+    assert "semicolon" in exc.value.message
+
+
+def test_newlines_inside_a_cell_are_collapsed():
+    """Every one of these fields renders onto a single line. A step carrying a
+    newline (Alt+Enter in a spreadsheet) would produce broken Gherkin."""
+    text = _csv(_csv_row(then="they are signed in\nand land on their dashboard"))
+    ticket = parse_csv_tickets(text)[0]
+    assert ticket["scenarios"][0]["then"] == (
+        "they are signed in and land on their dashboard"
+    )
+
+
+def test_steps_outside_the_length_bounds_are_refused():
+    short = _csv(_csv_row(when="tap"))
+    with pytest.raises(TrainingDataError) as exc:
+        parse_csv_tickets(short)
+    assert str(MIN_STEP_CHARS) in exc.value.message
+
+    long = _csv(_csv_row(then="x" * (MAX_STEP_CHARS + 1)))
+    with pytest.raises(TrainingDataError):
+        parse_csv_tickets(long)
+
+
+def test_too_many_scenarios_in_one_ticket_is_refused():
+    rows = [_csv_row()]
+    rows += [
+        _csv_row(
+            title="",
+            feature="",
+            as_a="",
+            i_want="",
+            so_that="",
+            description="",
+            ac_number=str(n),
+            ac_text=f"Criterion number {n} of this ticket.",
+            scenario=f"Scenario number {n}",
+        )
+        for n in range(2, MAX_SCENARIOS + 3)
+    ]
+    with pytest.raises(TrainingDataError) as exc:
+        parse_csv_tickets(_csv(*rows))
+    assert str(MAX_SCENARIOS) in exc.value.message
+
+
+def test_placeholder_text_is_refused():
+    with pytest.raises(TrainingDataError) as exc:
+        parse_csv_tickets(_csv(_csv_row(then="TODO decide what happens")))
+    assert exc.value.message == REASON_MESSAGES[REASON_PLACEHOLDER_TEXT]
+
+
+def test_an_empty_csv_is_refused():
+    with pytest.raises(TrainingDataError):
+        parse_csv_tickets("")
+    with pytest.raises(TrainingDataError) as exc:
+        parse_csv_tickets(CSV_HEADER + "\n")
+    assert "no data rows" in exc.value.message
+
+
+# --- The upload path --------------------------------------------------------
+
+
+def test_a_csv_upload_is_stored_as_jsonl():
+    """CSV is an authoring format: it is converted here so that nothing
+    downstream — the builder, --pairs-dir, the trainer — knows CSV exists."""
+    result = validate_upload("tickets.csv", GOOD_CSV.encode())
+    assert result.kind == "jsonl"
+    assert result.item_count == 1
+    assert result.stored_filename == "tickets.jsonl"
+
+    # What lands in Storage must itself pass the JSONL validator, which is the
+    # check that keeps the conversion honest.
+    assert validate_jsonl(result.data.decode()) == 1
+
+
+def test_a_utf8_bom_is_tolerated():
+    """Excel's "CSV UTF-8" writes a BOM. Without utf-8-sig it lands inside the
+    first header name and makes `ticket_id` unfindable."""
+    result = validate_upload("tickets.csv", b"\xef\xbb\xbf" + GOOD_CSV.encode())
+    assert result.item_count == 1
+
+
+def test_a_non_utf8_csv_says_how_to_re_save_it():
+    with pytest.raises(TrainingDataError) as exc:
+        validate_upload("tickets.csv", GOOD_CSV.encode("utf-16"))
+    assert "CSV UTF-8" in exc.value.message
+
+
+def test_feature_and_jsonl_uploads_are_stored_untouched():
+    """The conversion must not have changed the other two formats: their bytes
+    are the bytes that arrived, under the name they arrived under."""
+    data = GOOD_FEATURE.encode()
+    result = validate_upload("corpus.feature", data)
+    assert (result.kind, result.data, result.stored_filename) == (
+        "feature",
+        data,
+        "corpus.feature",
+    )
+
+
+def test_an_unsupported_extension_names_all_three():
+    with pytest.raises(TrainingDataError) as exc:
+        validate_upload("tickets.txt", b"anything")
+    assert ".csv" in exc.value.message

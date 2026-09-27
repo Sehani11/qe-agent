@@ -5,6 +5,7 @@ import apiClient from "@/lib/api/client";
 import { FINE_TUNED_STATUS_KEY } from "@/lib/hooks/useFineTunedStatus";
 import { filenameFromHeader, triggerBlobDownload } from "@/lib/download";
 import type {
+    ServingReadiness,
     TrainingDataset,
     TrainingReadiness,
     TrainingRun,
@@ -15,6 +16,7 @@ import { isRunActive } from "@/lib/types/training";
 const QUERY_KEY = ["training", "datasets"];
 const RUNS_KEY = ["training", "runs"];
 const READINESS_KEY = ["training", "readiness"];
+const SERVING_READINESS_KEY = ["training", "serving-readiness"];
 
 /**
  * Fetch the authenticated user's uploaded training datasets (Story 6.7).
@@ -104,7 +106,7 @@ export function useDeleteTrainingDataset() {
  */
 export function useDownloadSampleDataset() {
     return useMutation({
-        mutationFn: async (kind: "jsonl" | "feature") => {
+        mutationFn: async (kind: "jsonl" | "feature" | "csv") => {
             const response = await apiClient.get("/training/sample-dataset", {
                 params: { kind },
                 responseType: "blob",
@@ -113,9 +115,11 @@ export function useDownloadSampleDataset() {
                 response.data as Blob,
                 filenameFromHeader(
                     response.headers["content-disposition"],
-                    kind === "feature"
-                        ? "sample-scenarios.feature"
-                        : "sample-training-pairs.jsonl"
+                    {
+                        feature: "sample-scenarios.feature",
+                        csv: "sample-training-pairs.csv",
+                        jsonl: "sample-training-pairs.jsonl",
+                    }[kind]
                 )
             );
         },
@@ -140,6 +144,45 @@ export function useTrainingReadiness() {
     });
 }
 
+/** Whether a finished adapter can be published into a runtime from here. */
+export function useServingReadiness() {
+    return useQuery({
+        queryKey: SERVING_READINESS_KEY,
+        queryFn: async () => {
+            const { data } = await apiClient.get<ServingReadiness>(
+                "/training/serving-readiness"
+            );
+            return data;
+        },
+        retry: false,
+    });
+}
+
+/**
+ * Publish one run's adapter into the local model runtime.
+ *
+ * Converting and registering takes longer than a request, so this returns as
+ * soon as the row says `publishing` and the runs list polls from there — the
+ * same shape as starting a run.
+ */
+export function usePublishTrainingRun() {
+    const queryClient = useQueryClient();
+    return useMutation({
+        mutationFn: async (runId: string) => {
+            const { data } = await apiClient.post<TrainingRun>(
+                `/training/runs/${runId}/serve`
+            );
+            return data;
+        },
+        onSuccess: () => {
+            void queryClient.invalidateQueries({ queryKey: RUNS_KEY });
+            // What the app serves has just changed, so the model toggle's
+            // availability is stale.
+            void queryClient.invalidateQueries({ queryKey: FINE_TUNED_STATUS_KEY });
+        },
+    });
+}
+
 /**
  * The user's fine-tuning runs, polled while any of them is still moving.
  *
@@ -158,7 +201,12 @@ export function useTrainingRuns() {
         retry: false,
         refetchInterval: (query) => {
             const runs = query.state.data;
-            if (!runs?.some((run) => isRunActive(run.status))) return false;
+            // A publish is also a detached worker writing to the row, so it
+            // keeps the list polling exactly as a run does.
+            const busy = runs?.some(
+                (run) => isRunActive(run.status) || run.serve_status === "publishing"
+            );
+            if (!busy) return false;
             // Five seconds: the stages a user actually watches (build, fetch)
             // last a minute or two, while the long middle is a Kaggle kernel
             // whose own status the server polls far less often anyway.

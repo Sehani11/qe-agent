@@ -34,6 +34,15 @@ STATUS_COMPLETED = "completed"
 #: Stopped at some stage; `detail` says which and why.
 STATUS_FAILED = "failed"
 
+#: Publishing the finished adapter to the local model runtime. Separate from
+#: `status` because it is a different job with a different failure mode: a run
+#: can train perfectly and fail to publish, and one status column cannot say so.
+SERVE_PUBLISHING = "publishing"
+#: Registered in the runtime and being served under `served_model`.
+SERVE_SERVED = "served"
+#: The publish stopped; `serve_detail` says where.
+SERVE_FAILED = "failed"
+
 #: Statuses a run can still leave under its own power. Anything else is final,
 #: which is what lets the client stop polling.
 ACTIVE_STATUSES = frozenset(
@@ -73,6 +82,19 @@ class TrainingRun(Base):
     #: completes. Relative because the absolute path differs between the host
     #: that trained and any host that later serves.
     adapter_dir: Mapped[str | None] = mapped_column(String, nullable=True)
+
+    #: Where the publish to the local model runtime got to: None if it was
+    #: never attempted, then one of the SERVE_* constants. Nullable rather than
+    #: defaulted so "never tried" stays distinguishable from "tried and failed".
+    serve_status: Mapped[str | None] = mapped_column(String(20), nullable=True)
+    #: One line of context for `serve_status`, shown verbatim. On failure this
+    #: is what the user acts on, so it names the missing tool or the command to
+    #: run — never a stack trace.
+    serve_detail: Mapped[str | None] = mapped_column(String, nullable=True)
+    #: The name the adapter was registered under in the runtime. This is the
+    #: name the serving shim asks for, so it is also what identifies the model
+    #: to delete when the run is removed.
+    served_model: Mapped[str | None] = mapped_column(String, nullable=True)
 
     #: Accumulated stdout/stderr from every stage, appended as they run. This
     #: is what makes a failed run diagnosable without shell access to the host.

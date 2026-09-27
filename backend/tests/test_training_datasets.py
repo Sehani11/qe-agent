@@ -23,6 +23,7 @@ from fastapi.testclient import TestClient
 from app.core.auth import get_current_user
 from app.core.database import get_db
 from app.main import app
+from app.services import training_data_service
 from app.services.storage_service import StorageServiceError
 
 USER_A = "user-a-id"
@@ -174,6 +175,52 @@ def test_uploads_a_valid_jsonl_file(client_as_user_a, storage):
     accepted = resp.json()["accepted"][0]
     assert accepted["kind"] == "jsonl"
     assert accepted["item_count"] == 4
+
+
+def test_uploads_a_csv_and_stores_it_as_pairs(client_as_user_a, storage):
+    """A CSV is an authoring format: it is converted to pairs at upload.
+
+    The row keeps the name the user chose so the entry stays recognisable in
+    their list, while the stored object takes the extension its bytes now are.
+    """
+    db = _db_for_write()
+    app.dependency_overrides[get_db] = lambda: db
+    content = training_data_service.build_sample_csv().encode()
+
+    resp = client_as_user_a.post(
+        "/api/v1/training/datasets",
+        files=[("files", ("tickets.csv", content, "text/csv"))],
+    )
+
+    assert resp.status_code == 200
+    accepted = resp.json()["accepted"][0]
+    assert accepted["filename"] == "tickets.csv"
+    assert accepted["kind"] == "jsonl"
+    assert accepted["item_count"] == 1
+
+    stored = storage.upload_file.await_args.kwargs
+    assert stored["path"].endswith("tickets.jsonl")
+    assert stored["file_data"].decode().startswith('{"messages"')
+
+
+def test_csv_rejection_names_the_spreadsheet_row(client_as_user_a, storage):
+    """The row number the author sees in their gutter — the header is row 1, so
+    a bad first data row is row 2."""
+    db = _db_for_write()
+    app.dependency_overrides[get_db] = lambda: db
+    # Blank the ticket_id on the first data row: every row must name its ticket.
+    broken = training_data_service.build_sample_csv().replace(
+        "SAMPLE-1,Sign in,", ",Sign in,", 1
+    )
+
+    resp = client_as_user_a.post(
+        "/api/v1/training/datasets",
+        files=[("files", ("tickets.csv", broken.encode(), "text/csv"))],
+    )
+
+    assert resp.status_code == 422
+    assert "Row 2" in resp.json()["rejected"][0]["reason"]
+    storage.upload_file.assert_not_awaited()
 
 
 def test_feature_without_a_complete_scenario_is_rejected(client_as_user_a, storage):
