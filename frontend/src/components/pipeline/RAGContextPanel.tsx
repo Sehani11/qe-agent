@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useState, useCallback } from "react";
+import React, { useEffect, useRef, useState } from "react";
 import { BookOpen, ExternalLink, ChevronDown, ChevronUp } from "lucide-react";
 import type { RagContextItem } from "@/lib/types/verification";
 
@@ -54,13 +54,86 @@ function SourceLabel({ item }: { item: RagContextItem }) {
     return <span className="truncate font-medium text-foreground">{text}</span>;
 }
 
+/**
+ * One retrieved chunk: the source line, the snippet, and the toggle.
+ *
+ * Its own component so each item can measure itself — whether the clamp hides
+ * anything depends on this card's width, which only the element knows.
+ */
+function ContextItem({ item }: { item: RagContextItem }) {
+    const [isOpen, setIsOpen] = useState(false);
+    const [isClamped, setIsClamped] = useState(false);
+    const snippetRef = useRef<HTMLParagraphElement>(null);
+
+    // Whether `line-clamp-2` actually cuts anything off is a layout question,
+    // not a length one. Guessing from character count (">100 chars") put a
+    // "Show more" on snippets that already fitted on two lines — on a wide
+    // card the whole 300-character snippet fits, so the button revealed
+    // nothing when clicked.
+    //
+    // Skipped while open, because the clamp is off then and the element would
+    // measure as fitting — which would remove the only control that closes it
+    // again. The last collapsed measurement stands instead.
+    useEffect(() => {
+        const el = snippetRef.current;
+        if (isOpen || !el) return;
+
+        // ResizeObserver reports the initial size on observe, so this measures
+        // now and again on every reflow — no synchronous read needed here.
+        const observer = new ResizeObserver(() => {
+            // A pixel of tolerance: fractional line heights round the two
+            // values apart on text that is not actually clamped.
+            setIsClamped(el.scrollHeight > el.clientHeight + 1);
+        });
+        observer.observe(el);
+        return () => observer.disconnect();
+    }, [isOpen]);
+
+    return (
+        <li className="rounded border border-rule bg-card px-3 py-2">
+            <div className="mb-1 flex items-center gap-2">
+                <span className="shrink-0 rounded-full border border-keyword/30 bg-keyword-soft px-1.5 py-0.5 font-mono text-[10px] font-semibold uppercase text-keyword">
+                    {item.source}
+                </span>
+                <span className="min-w-0 flex-1 truncate font-mono text-xs">
+                    <SourceLabel item={item} />
+                </span>
+            </div>
+            <p
+                ref={snippetRef}
+                className={
+                    isOpen
+                        ? "text-xs leading-relaxed text-muted-foreground"
+                        : "line-clamp-2 text-xs leading-relaxed text-muted-foreground"
+                }
+            >
+                {item.snippet}
+            </p>
+            {isClamped && (
+                <button
+                    type="button"
+                    onClick={() => setIsOpen((open) => !open)}
+                    aria-expanded={isOpen}
+                    className="mt-1.5 inline-flex items-center gap-0.5 font-mono text-[11px] font-semibold text-keyword transition-opacity hover:opacity-75"
+                >
+                    {isOpen ? (
+                        <>
+                            Show less
+                            <ChevronUp className="h-3 w-3" aria-hidden="true" />
+                        </>
+                    ) : (
+                        <>
+                            Show more
+                            <ChevronDown className="h-3 w-3" aria-hidden="true" />
+                        </>
+                    )}
+                </button>
+            )}
+        </li>
+    );
+}
+
 export default function RAGContextPanel({ items }: RAGContextPanelProps) {
-    const [expanded, setExpanded] = useState<Record<number, boolean>>({});
-
-    const toggle = useCallback((idx: number) => {
-        setExpanded((prev) => ({ ...prev, [idx]: !prev[idx] }));
-    }, []);
-
     if (!items || items.length === 0) return <EmptyState />;
 
     return (
@@ -70,57 +143,12 @@ export default function RAGContextPanel({ items }: RAGContextPanelProps) {
                 <span className="eyebrow text-keyword">Knowledge Base Context</span>
             </p>
             <ul className="flex flex-col gap-2">
-                {items.map((item, idx) => {
-                    const isOpen = Boolean(expanded[idx]);
-                    // Only offer expand/collapse when the snippet is long enough to
-                    // actually be truncated by line-clamp-2 (~2 lines). Avoids a
-                    // no-op "Show more" on short snippets.
-                    const isTruncatable = (item.snippet?.length ?? 0) > 100;
-                    return (
-                        <li
-                            key={`${item.source}-${item.source_id}-${idx}`}
-                            className="rounded border border-rule bg-card px-3 py-2"
-                        >
-                            <div className="mb-1 flex items-center gap-2">
-                                <span className="shrink-0 rounded-full border border-keyword/30 bg-keyword-soft px-1.5 py-0.5 font-mono text-[10px] font-semibold uppercase text-keyword">
-                                    {item.source}
-                                </span>
-                                <span className="min-w-0 flex-1 truncate font-mono text-xs">
-                                    <SourceLabel item={item} />
-                                </span>
-                            </div>
-                            <p
-                                className={
-                                    isOpen || !isTruncatable
-                                        ? "text-xs leading-relaxed text-muted-foreground"
-                                        : "line-clamp-2 text-xs leading-relaxed text-muted-foreground"
-                                }
-                            >
-                                {item.snippet}
-                            </p>
-                            {isTruncatable && (
-                                <button
-                                    type="button"
-                                    onClick={() => toggle(idx)}
-                                    aria-expanded={isOpen}
-                                    className="mt-1.5 inline-flex items-center gap-0.5 font-mono text-[11px] font-semibold text-keyword transition-opacity hover:opacity-75"
-                                >
-                                    {isOpen ? (
-                                        <>
-                                            Show less
-                                            <ChevronUp className="h-3 w-3" aria-hidden="true" />
-                                        </>
-                                    ) : (
-                                        <>
-                                            Show more
-                                            <ChevronDown className="h-3 w-3" aria-hidden="true" />
-                                        </>
-                                    )}
-                                </button>
-                            )}
-                        </li>
-                    );
-                })}
+                {items.map((item, idx) => (
+                    <ContextItem
+                        key={`${item.source}-${item.source_id}-${idx}`}
+                        item={item}
+                    />
+                ))}
             </ul>
         </div>
     );

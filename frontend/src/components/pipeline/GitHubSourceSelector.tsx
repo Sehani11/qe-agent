@@ -16,7 +16,8 @@ import {
 import { Button } from "@/components/ui/button";
 import { Input, Textarea } from "@/components/ui/field";
 import { Switch } from "@/components/ui/switch";
-import { useCodeIndexStatus } from "@/lib/hooks/useKnowledge";
+// TODO(code-index): "Use code index" toggle temporarily disabled — see TODO.md.
+// import { useCodeIndexStatus } from "@/lib/hooks/useKnowledge";
 import { useProject } from "@/lib/hooks/useProjects";
 import { useActiveProjectId } from "@/lib/stores/projectStore";
 import { cn } from "@/lib/utils";
@@ -105,8 +106,9 @@ export default function GitHubSourceSelector({
         setGithubInput,
         useKnowledgeBase,
         setUseKnowledgeBase,
-        codeIndexEnabled,
-        setCodeIndexEnabled,
+        // TODO(code-index): re-enable once the "Use code index" toggle is back. See TODO.md.
+        // codeIndexEnabled,
+        // setCodeIndexEnabled,
     } = useSessionContext();
 
     // The repository this project already names, ready to drop into the field.
@@ -114,13 +116,14 @@ export default function GitHubSourceSelector({
     const { data: project } = useProject(activeProjectId);
     const defaultRepoUrl = repoUrlFrom(project?.github_repo);
 
+    // TODO(code-index): "Use code index" toggle temporarily disabled — see TODO.md.
     // Whether the code-index toggle can do anything. Retrieval needs an index
     // to read; without one the switch would send a flag the server ignores.
-    const { data: codeIndex } = useCodeIndexStatus();
-    const hasCodeIndex = Boolean(codeIndex?.indexed);
-    const codeIndexHint = hasCodeIndex
-        ? `Point the agent at the files most likely to hold each scenario, instead of it hunting for them. Indexed from ${codeIndex?.repo ?? "this project's repository"} at ${(codeIndex?.indexed_ref ?? "").slice(0, 7)}.`
-        : "Index this project's repository from the Knowledge page, under Code index, to enable this.";
+    // const { data: codeIndex } = useCodeIndexStatus();
+    // const hasCodeIndex = Boolean(codeIndex?.indexed);
+    // const codeIndexHint = hasCodeIndex
+    //     ? `Point the agent at the files most likely to hold each scenario, instead of it hunting for them. Indexed from ${codeIndex?.repo ?? "this project's repository"} at ${(codeIndex?.indexed_ref ?? "").slice(0, 7)}.`
+    //     : "Index this project's repository from the Knowledge page, under Code index, to enable this.";
 
     // Seeding on the mode CLICK is not enough: `DEFAULT_VERIFICATION_MODE` is
     // `full_repo`, so a session opens in that mode with nobody having clicked
@@ -264,12 +267,14 @@ export default function GitHubSourceSelector({
                     className="w-full items-start rounded-md border border-rule bg-surface-raised px-3 py-2.5 transition-colors hover:bg-muted/50"
                 />
 
-                {/* Opt-in to code-index discovery (default off). Disabled with
+                {/* TODO(code-index): "Use code index" toggle temporarily
+                    disabled — see TODO.md.
+                    Opt-in to code-index discovery (default off). Disabled with
                     an explanation rather than hidden when the project has no
                     index: a control that vanishes leaves nobody knowing the
                     capability exists, while one that is present and explained
                     says what to do to get it. */}
-                <div title={codeIndexHint}>
+                {/* <div title={codeIndexHint}>
                     <Switch
                         checked={codeIndexEnabled && hasCodeIndex}
                         onCheckedChange={setCodeIndexEnabled}
@@ -278,7 +283,7 @@ export default function GitHubSourceSelector({
                         description={codeIndexHint}
                         className="w-full items-start rounded-md border border-rule bg-surface-raised px-3 py-2.5 transition-colors hover:bg-muted/50"
                     />
-                </div>
+                </div> */}
 
                 {/* Run Verification button — single agentic flow (Story 2.5)
                     FIX H2: Removed aria-disabled — native <button disabled> already communicates

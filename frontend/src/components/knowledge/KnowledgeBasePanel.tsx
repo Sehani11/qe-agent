@@ -3,7 +3,8 @@
 import React, { useState } from "react";
 import {
     BookOpen,
-    Code2,
+    // TODO(code-index): Code index card temporarily disabled — see TODO.md.
+    // Code2,
     Database,
     ExternalLink,
     FileText,
@@ -13,18 +14,18 @@ import {
     Trash2,
 } from "lucide-react";
 import {
-    useCodeIndexStatus,
+    // useCodeIndexStatus,
     useDeleteAllKnowledgeSources,
     useDeleteKnowledgeSource,
-    useIndexCode,
+    // useIndexCode,
     useIngestConfluence,
     useIngestDocument,
     useIngestJira,
     useKnowledgeSources,
 } from "@/lib/hooks/useKnowledge";
-import { useProject } from "@/lib/hooks/useProjects";
-import { useActiveProjectId } from "@/lib/stores/projectStore";
-import type { KnowledgeSource, KnowledgeSSEEvent } from "@/lib/types/knowledge";
+// import { useProject } from "@/lib/hooks/useProjects";
+// import { useActiveProjectId } from "@/lib/stores/projectStore";
+import type { KnowledgeSource } from "@/lib/types/knowledge";
 import { ConfirmModal } from "@/components/ui/confirm-modal";
 import { Button } from "@/components/ui/button";
 import { Field, Input, Textarea } from "@/components/ui/field";
@@ -194,37 +195,38 @@ export default function KnowledgeBasePanel() {
         });
     };
 
+    // TODO(code-index): Code index card temporarily disabled — see TODO.md.
     // Code index state. The repo field is seeded from the project's configured
     // repository, which is the one verification runs against — typing it again
     // is the common case and getting it wrong makes an index nothing can use.
-    const activeProjectId = useActiveProjectId();
-    const { data: project } = useProject(activeProjectId);
-    const { data: codeIndex } = useCodeIndexStatus();
-    const [codeRepo, setCodeRepo] = useState("");
-    const [codeRef, setCodeRef] = useState("");
-    const [codeValidation, setCodeValidation] = useState<string | null>(null);
-    const [codeResult, setCodeResult] = useState<KnowledgeSSEEvent | null>(null);
-    const codeIndexer = useIndexCode({
-        onComplete: (_count, event) => setCodeResult(event),
-    });
+    // const activeProjectId = useActiveProjectId();
+    // const { data: project } = useProject(activeProjectId);
+    // const { data: codeIndex } = useCodeIndexStatus();
+    // const [codeRepo, setCodeRepo] = useState("");
+    // const [codeRef, setCodeRef] = useState("");
+    // const [codeValidation, setCodeValidation] = useState<string | null>(null);
+    // const [codeResult, setCodeResult] = useState<KnowledgeSSEEvent | null>(null);
+    // const codeIndexer = useIndexCode({
+    //     onComplete: (_count, event) => setCodeResult(event),
+    // });
 
-    const effectiveRepo = codeRepo.trim() || project?.github_repo?.trim() || "";
+    // const effectiveRepo = codeRepo.trim() || project?.github_repo?.trim() || "";
 
-    const handleIndexCode = (e: React.FormEvent) => {
-        e.preventDefault();
-        setCodeValidation(null);
-        setCodeResult(null);
-        if (!effectiveRepo) {
-            setCodeValidation(
-                "Enter a repository, or set one in Project settings first."
-            );
-            return;
-        }
-        void codeIndexer.ingest({
-            repo_url: effectiveRepo,
-            ref: codeRef.trim() || "HEAD",
-        });
-    };
+    // const handleIndexCode = (e: React.FormEvent) => {
+    //     e.preventDefault();
+    //     setCodeValidation(null);
+    //     setCodeResult(null);
+    //     if (!effectiveRepo) {
+    //         setCodeValidation(
+    //             "Enter a repository, or set one in Project settings first."
+    //         );
+    //         return;
+    //     }
+    //     void codeIndexer.ingest({
+    //         repo_url: effectiveRepo,
+    //         ref: codeRef.trim() || "HEAD",
+    //     });
+    // };
 
     // Confluence form state
     const [confluenceMethod, setConfluenceMethod] = useState<ConfluenceMethod>("space");
@@ -541,8 +543,8 @@ export default function KnowledgeBasePanel() {
                 </form>
             </div>
 
-            {/* Code index */}
-            <form
+            {/* TODO(code-index): Code index card temporarily disabled — see TODO.md. */}
+            {/* <form
                 onSubmit={handleIndexCode}
                 className="flex flex-col gap-3 rounded-lg border border-rule bg-card p-4"
             >
@@ -652,7 +654,7 @@ export default function KnowledgeBasePanel() {
                         </span>
                     </div>
                 )}
-            </form>
+            </form> */}
 
             {/* Document upload */}
             <form

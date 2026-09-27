@@ -262,6 +262,31 @@ def _is_relevant(match) -> bool:
     return score >= settings.rag_min_score
 
 
+SNIPPET_LIMIT = 300
+
+
+def _snippet(text: str, limit: int = SNIPPET_LIMIT) -> str:
+    """Excerpt a chunk for display and persistence, ending on a whole word.
+
+    A hard slice ended mid-word, which reads in the UI as text that failed to
+    load rather than as an excerpt. The ellipsis is the part that says the
+    source continues; it is counted against `limit` so callers that size a
+    column or a payload on that number still hold.
+    """
+    text = text.strip()
+    if len(text) <= limit:
+        return text
+
+    head = text[: limit - 1]
+    # Back up to the last space so the excerpt ends on a whole word. A chunk
+    # with no space in its first `limit` characters (a URL, a minified blob)
+    # has no boundary to find, so the hard cut is all that is available.
+    boundary = head.rfind(" ")
+    if boundary > 0:
+        head = head[:boundary]
+    return head.rstrip(" ,;:.—-") + "…"
+
+
 def _chunk_from_match(match) -> dict:
     """Build a RAG context dict from a Pinecone match (Story 4.4).
 
@@ -282,7 +307,7 @@ def _chunk_from_match(match) -> dict:
         "source": source,
         "source_id": source_id,
         # snippet: what the UI shows and what is persisted on verdicts.
-        "snippet": meta.get("text", "")[:300],
+        "snippet": _snippet(meta.get("text", "")),
         # text: the full chunk, for LLM grounding — answering from a 300-char
         # snippet loses most of the retrieved evidence.
         "text": meta.get("text", ""),

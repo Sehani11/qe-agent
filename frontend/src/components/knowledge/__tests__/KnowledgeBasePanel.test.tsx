@@ -78,7 +78,9 @@ let codeIndexStatusState: {
           }
         | undefined;
 };
-let codeIndexOptions: IngestOptions | undefined;
+// TODO(code-index): restore alongside the parked "code index card" tests below,
+// which are the only readers of the captured options.
+// let codeIndexOptions: IngestOptions | undefined;
 
 vi.mock("@/lib/hooks/useKnowledge", () => ({
     useIngestConfluence: (opts?: IngestOptions) => {
@@ -101,10 +103,12 @@ vi.mock("@/lib/hooks/useKnowledge", () => ({
         isPending: false,
     }),
     useCodeIndexStatus: () => codeIndexStatusState,
-    useIndexCode: (opts?: IngestOptions) => {
-        codeIndexOptions = opts;
-        return codeIndexState;
-    },
+    useIndexCode: () => codeIndexState,
+    // Restore with the parked tests:
+    // useIndexCode: (opts?: IngestOptions) => {
+    //     codeIndexOptions = opts;
+    //     return codeIndexState;
+    // },
 }));
 
 // useProjects and projectStore are deliberately NOT mocked. The code-index
@@ -548,8 +552,14 @@ describe("ingest button alignment", () => {
 
 // ---------------------------------------------------------------------------
 // Code index — the semantic index verification uses to find candidate files
+//
+// TODO(code-index): the card is commented out in KnowledgeBasePanel (see
+// TODO.md), so these are parked until it comes back. The useKnowledge mock
+// above still exports the two code-index hooks, so restoring this block is
+// just a matter of uncommenting it.
 // ---------------------------------------------------------------------------
 
+/*
 describe("code index card", () => {
     beforeEach(reset);
 
@@ -656,3 +666,4 @@ describe("code index card", () => {
         expect(screen.getByText(/could not resolve/i)).toBeInTheDocument();
     });
 });
+*/

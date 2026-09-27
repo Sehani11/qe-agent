@@ -423,6 +423,44 @@ class TestConfluenceServiceHelpers:
         result = _strip_html("<p>Hello <strong>world</strong></p>")
         assert result == "Hello world"
 
+    def test_strip_html_separates_block_elements(self):
+        """Block boundaries are sentence boundaries — dropping them welds text.
+
+        A page whose paragraph ended '...can end it.' before a heading came back
+        as '...can end it.Coding Challenges', which reads as broken text in the
+        UI and is no clearer to the embedding model.
+        """
+        from app.services.confluence_service import _strip_html
+
+        result = _strip_html(
+            "<p>Either person can end it.</p><h2>Coding Challenges</h2>"
+        )
+        assert result == "Either person can end it.\nCoding Challenges"
+
+    def test_strip_html_drops_macro_parameter_values(self):
+        """Macro config is not prose — its values were leaking into the text.
+
+        A layout macro's parameters came through concatenated as 'wide760true',
+        which is unreadable in the context panel and noise in the embedding.
+        """
+        from app.services.confluence_service import _strip_html
+
+        result = _strip_html(
+            '<ac:structured-macro ac:name="panel">'
+            '<ac:parameter ac:name="layout">wide</ac:parameter>'
+            '<ac:parameter ac:name="width">760</ac:parameter>'
+            '<ac:parameter ac:name="border">true</ac:parameter>'
+            "<ac:rich-text-body><p>Real content.</p></ac:rich-text-body>"
+            "</ac:structured-macro>"
+        )
+        assert result == "Real content."
+
+    def test_strip_html_keeps_inline_tags_from_splitting_words(self):
+        """Inline tags are removed outright — a space there would split a word."""
+        from app.services.confluence_service import _strip_html
+
+        assert _strip_html("<p>re<strong>start</strong>ed</p>") == "restarted"
+
     def test_strip_html_decodes_entities(self):
         """_strip_html decodes HTML entities like &amp; and &lt;."""
         from app.services.confluence_service import _strip_html
