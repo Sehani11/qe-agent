@@ -32,6 +32,26 @@ uv run uvicorn app.main:app --reload --port 8000
 - Health: http://localhost:8000/health
 - Docs: http://localhost:8000/docs
 
+**If you will use the Fine tune page's "Train now" button**, add one more
+one-time install:
+
+```powershell
+cd backend
+uv pip install kaggle
+```
+
+`uv pip install`, not `uv add`: the Train button shells out to
+[`training/kaggle_run.py`](training/kaggle_run.py) using the backend venv's
+interpreter, so `kaggle` has to be importable there — but it is deliberately
+kept out of `pyproject.toml`, because the backend Dockerfile ends with
+`COPY . .` and anything in the dependency set would ship in the production
+image ([training/requirements.txt](training/requirements.txt) spells this out).
+Installing it into the venv without declaring it keeps both true.
+
+Without it, a run fails at the push step with `No module named 'kaggle'` — which
+the UI currently reports as "Kaggle rejected the run… needs the account to be
+phone-verified", so check the run's log before believing that message.
+
 ### Terminal 2 — Frontend (port 3000)
 
 ```powershell
