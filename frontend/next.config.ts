@@ -2,7 +2,8 @@ import type { NextConfig } from "next";
 
 // Extract the host from NEXT_PUBLIC_SITE_URL so Next.js allows Server Actions
 // from the CloudFront domain. Without this, Next.js 15's CSRF guard rejects
-// actions when x-forwarded-host doesn't match the Origin header.
+// actions when x-forwarded-host doesn't match the Origin header. Must sit under
+// `experimental` — Next ignores (and warns about) a top-level `serverActions`.
 const siteHost = (process.env.NEXT_PUBLIC_SITE_URL ?? "")
   .replace(/^https?:\/\//, "")
   .replace(/\/$/, "");
@@ -10,8 +11,10 @@ const siteHost = (process.env.NEXT_PUBLIC_SITE_URL ?? "")
 const nextConfig: NextConfig = {
   output: "standalone",
   ...(siteHost && {
-    serverActions: {
-      allowedOrigins: [siteHost],
+    experimental: {
+      serverActions: {
+        allowedOrigins: [siteHost],
+      },
     },
   }),
   // /training and /comparison merged into /fine-tune. Redirected rather than
