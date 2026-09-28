@@ -5,7 +5,7 @@ QE Verification Agent — FastAPI backend + Next.js frontend.
 ## Prerequisites
 
 - Python 3.12+ and [uv](https://docs.astral.sh/uv/)
-- Node.js 20+ and npm
+- Node.js 20+ and [pnpm](https://pnpm.io/installation) (the frontend has a `pnpm-lock.yaml`; don't use npm)
 - A reachable Postgres (the repo is configured against hosted Supabase; see `backend/.env`)
 
 ## Setup
@@ -56,8 +56,8 @@ phone-verified", so check the run's log before believing that message.
 
 ```powershell
 cd frontend
-npm install                         # one-time
-npm run dev
+pnpm install                        # one-time
+pnpm dev
 ```
 
 - App: http://localhost:3000
@@ -238,7 +238,7 @@ uv run pytest
 
 # Frontend
 cd frontend
-npx vitest
+pnpm exec vitest
 ```
 
 ## Project layout
