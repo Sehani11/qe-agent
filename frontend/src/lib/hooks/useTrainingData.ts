@@ -159,6 +159,31 @@ export function useServingReadiness() {
 }
 
 /**
+ * Ask Kaggle what a dropped run's kernel is doing, and pick up from there.
+ *
+ * The watcher is the fragile part of a long run — a DNS blip or the wall-clock
+ * timeout ends it while the kernel carries on — so this re-attaches instead of
+ * starting over. It never pushes: a new run would overwrite the very kernel
+ * being recovered.
+ */
+export function useRecheckTrainingRun() {
+    const queryClient = useQueryClient();
+    return useMutation({
+        mutationFn: async (runId: string) => {
+            const { data } = await apiClient.post<TrainingRun>(
+                `/training/runs/${runId}/recheck`
+            );
+            return data;
+        },
+        onSuccess: () => {
+            void queryClient.invalidateQueries({ queryKey: RUNS_KEY });
+            // The run is active again, so "can another run start" has changed.
+            void queryClient.invalidateQueries({ queryKey: READINESS_KEY });
+        },
+    });
+}
+
+/**
  * Publish one run's adapter into the local model runtime.
  *
  * Converting and registering takes longer than a request, so this returns as

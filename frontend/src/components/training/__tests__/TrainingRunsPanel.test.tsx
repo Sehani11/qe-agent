@@ -29,6 +29,7 @@ let startState: { mutate: typeof startMutate; isPending: boolean };
 const deleteRunMutate = vi.fn();
 const clearFinishedMutate = vi.fn();
 const publishMutate = vi.fn();
+const recheckMutate = vi.fn();
 // Publishing is possible by default so the button is present in most tests;
 // the blocked case sets this and asserts it disappears.
 let servingState: { data: { can_serve: boolean; reason: string | null } } = {
@@ -47,6 +48,7 @@ vi.mock("@/lib/hooks/useTrainingData", () => ({
     }),
     useServingReadiness: () => servingState,
     usePublishTrainingRun: () => ({ mutate: publishMutate, isPending: false }),
+    useRecheckTrainingRun: () => ({ mutate: recheckMutate, isPending: false }),
 }));
 
 function makeRun(overrides: Partial<TrainingRun> = {}): TrainingRun {
@@ -574,5 +576,71 @@ describe("the cost warning", () => {
 
         const dialog = screen.getByRole("dialog");
         expect(within(dialog).getByText(/1 feature file[^s]/i)).toBeInTheDocument();
+    });
+});
+
+
+// ---------------------------------------------------------------------------
+// Recovering a run whose watcher died
+// ---------------------------------------------------------------------------
+//
+// The watcher is the fragile part of a long run: it polls for hours, so a DNS
+// blip or the wall-clock timeout ends it while the GPU kernel carries on. The
+// row reads failed for work that is still running, and the only button on
+// offer must not be "Train now" — that pushes over the very kernel being
+// recovered.
+
+describe("rechecking a dropped run", () => {
+    const recheckButton = () => screen.getByRole("button", { name: /check kaggle/i });
+
+    it("offers the recovery on a failed run that reached Kaggle", () => {
+        runsState.data = [
+            makeRun({ status: "failed", has_model: false, detail: "gaierror" }),
+        ];
+        render(<TrainingRunsPanel datasetCount={2} />);
+
+        expect(recheckButton()).toBeInTheDocument();
+    });
+
+    it("rechecks the run that was clicked", () => {
+        runsState.data = [
+            makeRun({ id: "run-9", status: "failed", has_model: false }),
+        ];
+        render(<TrainingRunsPanel datasetCount={2} />);
+
+        fireEvent.click(recheckButton());
+
+        expect(recheckMutate).toHaveBeenCalledTimes(1);
+        expect(recheckMutate.mock.calls[0][0]).toBe("run-9");
+    });
+
+    it("does not offer it on a run that never reached Kaggle", () => {
+        // No kernel means nothing to re-attach to; the fix is a new run.
+        runsState.data = [
+            makeRun({ status: "failed", has_model: false, kernel_ref: null }),
+        ];
+        render(<TrainingRunsPanel datasetCount={2} />);
+
+        expect(
+            screen.queryByRole("button", { name: /check kaggle/i })
+        ).not.toBeInTheDocument();
+    });
+
+    it("does not offer it on a run that already collected its adapter", () => {
+        runsState.data = [makeRun({ status: "completed", has_model: true })];
+        render(<TrainingRunsPanel datasetCount={2} />);
+
+        expect(
+            screen.queryByRole("button", { name: /check kaggle/i })
+        ).not.toBeInTheDocument();
+    });
+
+    it("does not offer it while the run is still being watched", () => {
+        runsState.data = [makeRun({ status: "training", has_model: false })];
+        render(<TrainingRunsPanel datasetCount={2} />);
+
+        expect(
+            screen.queryByRole("button", { name: /check kaggle/i })
+        ).not.toBeInTheDocument();
     });
 });

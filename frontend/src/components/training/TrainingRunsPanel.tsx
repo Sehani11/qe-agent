@@ -10,6 +10,7 @@ import {
     Loader2,
     Play,
     Radio,
+    RefreshCw,
     Terminal,
     Trash2,
 } from "lucide-react";
@@ -25,6 +26,7 @@ import {
     useDeleteTrainingRun,
     useDownloadTrainedModel,
     usePublishTrainingRun,
+    useRecheckTrainingRun,
     useServingReadiness,
     useStartTrainingRun,
     useTrainingReadiness,
@@ -106,9 +108,35 @@ function RunRow({
 }) {
     const download = useDownloadTrainedModel();
     const publish = usePublishTrainingRun();
+    const recheck = useRecheckTrainingRun();
     const toast = useToast();
     const active = isRunActive(run.status);
     const publishing = run.serve_status === "publishing";
+    // A run that reached Kaggle, produced no adapter and is no longer being
+    // watched. Its kernel may well still be running — the watcher is what
+    // died, not the training.
+    const canRecheck =
+        !active && !!run.kernel_ref && !run.has_model && run.status === "failed";
+
+    const handleRecheck = () => {
+        recheck.mutate(run.id, {
+            onSuccess: (updated) => {
+                toast.success("Checking Kaggle", {
+                    description:
+                        updated.detail ??
+                        "Watching the kernel again. If it has already finished, the adapter is collected now.",
+                });
+            },
+            onError: (error) => {
+                toast.error("Could not check that run", {
+                    description: apiErrorMessage(
+                        error,
+                        "Kaggle could not be reached. Try again in a moment."
+                    ),
+                });
+            },
+        });
+    };
 
     const handlePublish = () => {
         publish.mutate(run.id, {
@@ -171,6 +199,24 @@ function RunRow({
                             Kernel
                             <ExternalLink className="h-3 w-3" aria-hidden="true" />
                         </a>
+                    )}
+
+                    {/* The recovery for a watcher that died while the
+                        kernel lived. Deliberately NOT "Train now": pushing
+                        again would overwrite the kernel this is recovering. */}
+                    {canRecheck && (
+                        <Button
+                            size="sm"
+                            variant="outline"
+                            onClick={handleRecheck}
+                            disabled={recheck.isPending}
+                            loading={recheck.isPending}
+                        >
+                            {!recheck.isPending && (
+                                <RefreshCw className="h-3.5 w-3.5" aria-hidden="true" />
+                            )}
+                            Check Kaggle
+                        </Button>
                     )}
 
                     {/* Publishing and downloading are the two things to do
