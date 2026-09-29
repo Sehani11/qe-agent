@@ -26,6 +26,7 @@ import re
 import shutil
 import subprocess
 import sys
+import threading
 import zipfile
 from collections.abc import Sequence
 from dataclasses import dataclass
@@ -226,7 +227,7 @@ def _stage_env() -> dict[str, str]:
     return env
 
 
-def _pump(args: list[str], sink) -> int:
+def _pump(args: list[str], sink, timeout: float | None = None) -> int:
     """Run one script to completion on a worker thread, feeding `sink` its lines.
 
     Blocking `subprocess.Popen`, NOT `asyncio.create_subprocess_exec`, and that
@@ -256,15 +257,39 @@ def _pump(args: list[str], sink) -> int:
         bufsize=1,  # line buffered, so progress arrives while the stage runs
         creationflags=creation_flags,
     )
-    assert process.stdout is not None
-    for line in process.stdout:
-        sink(line)
-    process.stdout.close()
-    return process.wait()
+    # A watchdog, because the deadline in `_await_kernel` is only tested
+    # BETWEEN polls: a status call that hangs on a stuck socket never returns,
+    # the loop never comes back round, and the run sits in `training` forever
+    # with no way to clear it from the UI. Observed for real - a row frozen on
+    # one detail line for 66 minutes against a 60-second poll.
+    #
+    # Killing the child is what makes the read below return; a thread blocked
+    # in `readline` cannot be interrupted any other way.
+    watchdog = threading.Timer(timeout, process.kill) if timeout else None
+    if watchdog:
+        watchdog.daemon = True
+        watchdog.start()
+
+    try:
+        assert process.stdout is not None
+        for line in process.stdout:
+            sink(line)
+        process.stdout.close()
+        return process.wait()
+    finally:
+        if watchdog:
+            watchdog.cancel()
 
 
-async def _run_script(run_id, args: list[str], *, label: str) -> _Result:
-    """Run one training script, streaming its output into the run row."""
+async def _run_script(
+    run_id, args: list[str], *, label: str, timeout: float | None = None
+) -> _Result:
+    """Run one training script, streaming its output into the run row.
+
+    `timeout` bounds the child process. Left unset for the stages that are
+    legitimately slow (a dataset build, an upload); set for the status poll,
+    which talks to Kaggle every minute and is the one that hangs.
+    """
     await _update(run_id, append=f"\n$ {label}\n")
 
     loop = asyncio.get_running_loop()
@@ -277,7 +302,7 @@ async def _run_script(run_id, args: list[str], *, label: str) -> _Result:
 
     def pump() -> int:
         try:
-            return _pump(args, sink)
+            return _pump(args, sink, timeout)
         finally:
             # Sentinel, in a finally: a crash inside Popen must still release
             # the reader below, or the run hangs instead of failing.
@@ -492,17 +517,70 @@ async def _kernel_failure_reason(run_id) -> str:
     )
 
 
+#: Consecutive failed polls tolerated before a run is given up on.
+#:
+#: One failure says nothing about the kernel. A run polls for hours, so a DNS
+#: blip or a dropped connection somewhere in those hours is close to certain -
+#: and a `gaierror` on a single poll used to end a run whose GPU work was
+#: perfectly healthy. Five in a row (five minutes) is a real outage.
+_MAX_POLL_FAILURES = 5
+
+#: One status poll is a process launch and one HTTPS call. Three minutes is
+#: far beyond any honest answer and well under the poll interval's patience.
+_POLL_TIMEOUT_SECONDS = 180.0
+
+
 async def _await_kernel(run_id) -> None:
     """Poll the kernel until it reaches a terminal state."""
     deadline = asyncio.get_running_loop().time() + settings.training_timeout_seconds
+    failures = 0
     while True:
-        result = await _run_script(
-            run_id,
-            ["training/kaggle_run.py", "--status"],
-            label="kaggle_run.py --status",
-        )
+        try:
+            result = await _run_script(
+                run_id,
+                ["training/kaggle_run.py", "--status"],
+                label="kaggle_run.py --status",
+                timeout=_POLL_TIMEOUT_SECONDS,
+            )
+        except Exception as exc:
+            # Raised in THIS process, not the child: a DNS failure resolving
+            # the database while writing progress, a dropped pool connection.
+            # The kernel is unaffected, so the poll is retried rather than the
+            # run abandoned.
+            failures += 1
+            logger.info(
+                "Poll %s/%s for run %s failed: %s",
+                failures,
+                _MAX_POLL_FAILURES,
+                run_id,
+                type(exc).__name__,
+            )
+            if failures >= _MAX_POLL_FAILURES:
+                raise TrainingRunError(
+                    f"Lost contact while watching the Kaggle run "
+                    f"({type(exc).__name__}, {failures} attempts). The kernel "
+                    "may still be running - use Check Kaggle to pick it up "
+                    "again."
+                ) from exc
+            await asyncio.sleep(settings.training_poll_seconds)
+            continue
+
         states = _STATUS_RE.findall(result.output)
         state = (states[-1] if states else "unknown").lower()
+        # A killed or garbled poll yields no state. That is not an answer about
+        # the kernel, so it counts as a failure rather than a verdict - and
+        # `unknown` is deliberately not in the terminal set, so the loop would
+        # otherwise spin on it silently.
+        if not states:
+            failures += 1
+            if failures >= _MAX_POLL_FAILURES:
+                raise TrainingRunError(
+                    f"Could not read the Kaggle run's status after {failures} "
+                    "attempts. The kernel may still be running - use Check "
+                    "Kaggle to pick it up again."
+                )
+        else:
+            failures = 0
 
         if state in _TERMINAL_KERNEL_STATES:
             if state != "complete":
@@ -515,8 +593,13 @@ async def _await_kernel(run_id) -> None:
         await _update(run_id, detail=f"Training on Kaggle (kernel {state})")
         if asyncio.get_running_loop().time() > deadline:
             raise TrainingRunError(
-                "Timed out waiting for the Kaggle run. It may still finish — "
-                "check the kernel, then start a new run to collect the result."
+                    "Timed out waiting for the Kaggle run, but the kernel may "
+                    "still be going -- this only means the app stopped watching. "
+                    "Check it with `kaggle_run.py --status`, and once it reads "
+                    "COMPLETE collect the adapter with `kaggle_run.py --fetch`. "
+                    "Do NOT start a new run to recover this one: a new run pushes "
+                    "over the same kernel and would discard the GPU time this one "
+                    "has already spent."
             )
         await asyncio.sleep(settings.training_poll_seconds)
 
@@ -617,6 +700,103 @@ async def _execute(run_id, user_id: str) -> None:
 #: weak reference to a running task, so without this the garbage collector is
 #: free to cancel a run mid-flight.
 _running: set[asyncio.Task] = set()
+
+# --- Recovering a dropped run ------------------------------------------------
+#
+# The watcher is the fragile part of a run, not the run itself. It polls once a
+# minute for hours, so a DNS blip (`gaierror`) or the wall-clock timeout ends it
+# while the GPU kernel carries on perfectly happily. The row then reads `failed`
+# for work that is still running, and the only recoveries were `--fetch` at a
+# shell or editing the row by hand.
+#
+# So: ask Kaggle what the kernel is really doing, and pick up from there. This
+# never pushes. Re-pushing is what destroys a live kernel, and it is exactly
+# what someone does when the only button offered is "Train now".
+
+
+async def _resume(run_id) -> None:
+    """Wait for an already-pushed kernel, then collect it. No push."""
+    try:
+        with _BorrowedDataDir():
+            await _await_kernel(run_id)
+            adapter_dir = await _collect_adapter(run_id)
+
+        await _update(
+            run_id,
+            status=STATUS_COMPLETED,
+            detail="Trained. The adapter is ready to download.",
+            adapter_dir=adapter_dir,
+            completed_at=datetime.now(UTC),
+        )
+    except TrainingRunError as exc:
+        await _update(
+            run_id,
+            status=STATUS_FAILED,
+            detail=exc.message,
+            completed_at=datetime.now(UTC),
+        )
+    except Exception as exc:  # pragma: no cover - defensive, as in `_execute`
+        logger.exception("Resumed run %s crashed", run_id)
+        await _update(
+            run_id,
+            status=STATUS_FAILED,
+            detail=f"The run stopped unexpectedly: {type(exc).__name__}.",
+            completed_at=datetime.now(UTC),
+        )
+
+
+async def recheck_run(run: TrainingRun, db: AsyncSession) -> TrainingRun:
+    """Ask Kaggle what this run's kernel is doing, and act on the answer.
+
+    Three outcomes, and the row says which:
+
+      * still going  - the row goes back to `training` and a watcher re-attaches
+      * finished     - the adapter is collected, which is the whole point
+      * really dead  - the row stays failed, now with the kernel's own verdict
+
+    Refused when another run is active: a single kernel slug is shared, so a
+    later run has already pushed over this one and there is nothing of this run
+    left on Kaggle to wait for.
+    """
+    if run.status in ACTIVE_STATUSES:
+        raise TrainingRunError("This run is already being watched.")
+    if not run.kernel_ref:
+        raise TrainingRunError(
+            "This run never reached Kaggle, so there is no kernel to check. "
+            "Start a new run."
+        )
+    if run.adapter_dir:
+        raise TrainingRunError(
+            "This run already collected its adapter; there is nothing to "
+            "recover."
+        )
+
+    unavailable = training_available()
+    if unavailable:
+        raise TrainingRunError(unavailable)
+
+    active = await db.execute(
+        select(TrainingRun.id)
+        .where(TrainingRun.status.in_(ACTIVE_STATUSES), TrainingRun.id != run.id)
+        .limit(1)
+    )
+    if active.scalar_one_or_none() is not None:
+        raise TrainingRunError(
+            "Another run is in progress. Runs share one Kaggle kernel, so that "
+            "run has replaced this one and there is nothing left to collect."
+        )
+
+    run.status = STATUS_TRAINING
+    run.detail = "Asking Kaggle what the kernel is doing"
+    run.completed_at = None
+    await db.commit()
+    await db.refresh(run)
+
+    task = asyncio.create_task(_resume(run.id))
+    _running.add(task)
+    task.add_done_callback(_running.discard)
+    return run
+
 
 
 async def abandon_orphaned_runs() -> int:

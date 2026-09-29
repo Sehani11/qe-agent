@@ -358,6 +358,31 @@ async def download_run_model(
 
 
 @router.post(
+    "/runs/{run_id}/recheck",
+    response_model=TrainingRunResponse,
+    status_code=202,
+)
+async def recheck_run(
+    run_id: str,
+    db: AsyncSession = Depends(get_db),  # noqa: B008
+    current_user: str = Depends(get_current_user),
+) -> TrainingRunResponse:
+    """Ask Kaggle what a dropped run's kernel is doing, and pick up from there.
+
+    The watcher is what fails on a long run - a DNS blip, or the wall-clock
+    timeout - while the kernel itself carries on. This re-attaches to it
+    WITHOUT pushing, which is the difference between recovering a run and
+    destroying it.
+    """
+    run = await _owned_run(run_id, current_user, db)
+    try:
+        run = await training_run_service.recheck_run(run, db)
+    except TrainingRunError as exc:
+        raise HTTPException(status_code=409, detail=exc.message) from exc
+    return _to_run_response(run)
+
+
+@router.post(
     "/runs/{run_id}/serve",
     response_model=TrainingRunResponse,
     status_code=202,

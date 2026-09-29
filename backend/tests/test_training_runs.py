@@ -28,10 +28,12 @@ from app.core.database import get_db
 from app.main import app
 from app.models.training_run import (
     STATUS_COMPLETED,
+    STATUS_FAILED,
     STATUS_QUEUED,
     STATUS_TRAINING,
 )
 from app.services import training_data_service, training_run_service
+from app.services.training_run_service import TrainingRunError
 
 USER_A = "user-a-id"
 USER_B = "user-b-id"
@@ -1086,3 +1088,118 @@ def test_a_crash_inside_the_stage_fails_the_run_rather_than_hanging_it():
             )
     finally:
         loop.close()
+
+
+# ---------------------------------------------------------------------------
+# Recovering a run whose watcher died
+# ---------------------------------------------------------------------------
+#
+# A long run polls Kaggle once a minute for hours, so the WATCHER is what
+# fails: a DNS blip (`gaierror`), or the wall-clock timeout. The kernel carries
+# on regardless, and the row then reads `failed` for work that is still
+# running. `recheck_run` re-attaches to that kernel.
+#
+# The rule these tests exist to hold: it must never push. Pushing is what
+# destroys a live kernel, and it is what "Train now" — the only other button —
+# would do.
+
+
+class _ResumableRun:
+    """The fields `recheck_run` reads, without a database."""
+
+    def __init__(self, **fields):
+        self.id = uuid.uuid4()
+        self.user_id = USER_A
+        self.status = STATUS_FAILED
+        self.kernel_ref = "someone/bdd-fine-tune"
+        self.adapter_dir = None
+        self.detail = "The run stopped unexpectedly: gaierror."
+        self.completed_at = datetime(2026, 9, 28, tzinfo=UTC)
+        self.__dict__.update(fields)
+
+
+@pytest.fixture
+def resumable(monkeypatch):
+    """A server able to run training, with the worker stubbed out."""
+    monkeypatch.setattr(training_run_service, "training_available", lambda: None)
+    started: list = []
+
+    async def fake_resume(run_id):
+        started.append(run_id)
+
+    monkeypatch.setattr(training_run_service, "_resume", fake_resume)
+    return started
+
+
+async def _drain_workers():
+    for task in list(training_run_service._running):
+        await task
+
+
+async def test_rechecking_reattaches_without_pushing(resumable):
+    """The row goes back to active and a watcher starts. No push: that is the
+    difference between recovering a kernel and destroying it."""
+    db = AsyncMock()
+    db.execute = AsyncMock(return_value=_scalar_one(None))
+    run = _ResumableRun()
+
+    result = await training_run_service.recheck_run(run, db)
+
+    assert result.status == "training"
+    assert result.completed_at is None
+    await _drain_workers()
+    assert resumable == [run.id]
+
+
+async def test_a_run_that_never_reached_kaggle_cannot_be_rechecked(resumable):
+    db = AsyncMock()
+    db.execute = AsyncMock(return_value=_scalar_one(None))
+
+    with pytest.raises(TrainingRunError) as exc:
+        await training_run_service.recheck_run(_ResumableRun(kernel_ref=None), db)
+    assert "never reached Kaggle" in exc.value.message
+
+
+async def test_a_run_that_already_has_its_adapter_is_left_alone(resumable):
+    db = AsyncMock()
+    db.execute = AsyncMock(return_value=_scalar_one(None))
+
+    with pytest.raises(TrainingRunError) as exc:
+        await training_run_service.recheck_run(
+            _ResumableRun(adapter_dir="training/outputs/run-abc12345"), db
+        )
+    assert "nothing to recover" in exc.value.message
+
+
+async def test_an_active_run_is_not_rechecked(resumable):
+    db = AsyncMock()
+    db.execute = AsyncMock(return_value=_scalar_one(None))
+
+    with pytest.raises(TrainingRunError) as exc:
+        await training_run_service.recheck_run(
+            _ResumableRun(status="training"), db
+        )
+    assert "already being watched" in exc.value.message
+
+
+async def test_recheck_is_refused_while_another_run_is_going(resumable):
+    """Runs share one kernel slug, so a later run has already pushed over this
+    one — there is nothing of it left on Kaggle to collect."""
+    db = AsyncMock()
+    db.execute = AsyncMock(return_value=_scalar_one(uuid.uuid4()))
+
+    with pytest.raises(TrainingRunError) as exc:
+        await training_run_service.recheck_run(_ResumableRun(), db)
+    assert "replaced this one" in exc.value.message
+
+
+async def test_recheck_needs_the_training_scripts(monkeypatch):
+    monkeypatch.setattr(
+        training_run_service, "training_available", lambda: "no training/ here"
+    )
+    db = AsyncMock()
+    db.execute = AsyncMock(return_value=_scalar_one(None))
+
+    with pytest.raises(TrainingRunError) as exc:
+        await training_run_service.recheck_run(_ResumableRun(), db)
+    assert exc.value.message == "no training/ here"

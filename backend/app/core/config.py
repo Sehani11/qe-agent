@@ -218,9 +218,17 @@ class Settings(BaseSettings):
     # the run itself takes tens of minutes and nothing is gained by asking more
     # often than a person would refresh.
     training_poll_seconds: int = 60
-    # Give up waiting after this long. The kernel may still finish on Kaggle —
-    # the run says so rather than claiming the training failed.
-    training_timeout_seconds: int = 7200
+    # Give up waiting after this long. The kernel may still finish on Kaggle
+    # -- the run says so rather than claiming the training failed, and
+    # `kaggle_run.py --fetch` collects it afterwards.
+    #
+    # Six hours, not two. Two was set when a run trained on ~200 pairs and
+    # finished inside an hour. A 2,836-pair run measured 129 minutes of
+    # training plus 147 of holdout scoring, so it tripped a 7200s timeout
+    # while the kernel was still healthy -- and the row then read `failed`
+    # for a run that went on to succeed. Waiting longer costs nothing: the
+    # poll is one process launch a minute.
+    training_timeout_seconds: int = 21600
 
     # Server
     host: str = "0.0.0.0"
